@@ -1,0 +1,8 @@
+\Specs
+.venv
+.env
+__pycache__/
+*.pyc
+Scripts/ResearchTool/Data/cache/
+Scripts/ResearchTool/Data/processed/
+Scripts/ResearchTool/Data/*.log

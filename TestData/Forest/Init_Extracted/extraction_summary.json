@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-09-13T22:45:03.645856+00:00",
+  "input_dir": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init",
+  "output_dir": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init_Extracted",
+  "geometry_source": "built_in_approx_russia_geometry",
+  "note": "Russia is selected by point-in-polygon. The built-in geometry is coarse; set RUSSIA_BOUNDARY_GEOJSON for strict country borders.",
+  "files": [
+    {
+      "input_file": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init\\training_2001_2025_v1_3.csv",
+      "output_file": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init_Extracted\\training_2001_2025_v1_3_russia.csv",
+      "format": "csv",
+      "input_rows": 8433,
+      "extracted_rows": 841,
+      "drivers": {
+        "Wildfire": 321,
+        "Logging": 210,
+        "Settlements & infrastructure": 53,
+        "Hard commodities": 91,
+        "Other natural disturbances": 79,
+        "Permanent agriculture": 21,
+        "Noise/non-forest": 66
+      }
+    },
+    {
+      "input_file": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init\\validation_2001_2022.geojson",
+      "output_file": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init_Extracted\\validation_2001_2022_russia.geojson",
+      "format": "geojson",
+      "input_features": 3574,
+      "extracted_features": 337,
+      "drivers": {
+        "Logging": 92,
+        "Wildfire": 131,
+        "Other natural disturbances": 71,
+        "Permanent agriculture": 10,
+        "Hard commodities": 29,
+        "Settlements & infrastructure": 4
+      }
+    }
+  ],
+  "combined_csv": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\TestData\\Forest\\Init_Extracted\\russia_points_combined.csv",
+  "total_extracted": 1178,
+  "combined_driver_counts": {
+    "Wildfire": 452,
+    "Logging": 302,
+    "Settlements & infrastructure": 57,
+    "Hard commodities": 120,
+    "Other natural disturbances": 150,
+    "Permanent agriculture": 31,
+    "Noise/non-forest": 66
+  }
+}

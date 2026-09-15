@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Satellite Pipeline Explorer</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/frontend/styles.css?v=forest-iter2-11" />
+  </head>
+  <body data-mode="forest">
+    <main class="shell">
+      <aside class="sidebar">
+        <header class="brand">
+          <div>
+            <h1>Satellite Pipeline Explorer</h1>
+            <p id="healthStatus">offline</p>
+          </div>
+          <button id="sidebarToggle" class="sidebarToggle" type="button" aria-expanded="true" title="Toggle sidebar">
+            <span></span>
+            <span></span>
+          </button>
+        </header>
+
+        <section class="modeSwitch" aria-label="Mode">
+          <button id="forestModeBtn" type="button">Forest</button>
+          <button id="pipelineModeBtn" type="button">Pipeline</button>
+        </section>
+
+        <section class="panel forestOnly">
+          <h2>Import</h2>
+          <label class="fileButton">
+            CSV / GeoJSON
+            <input id="forestFileInput" type="file" accept=".csv,.geojson,.json" multiple />
+          </label>
+          <button id="forestImportBtn" class="primary">Import selected</button>
+          <div id="forestImportStatus" class="meta">no files selected</div>
+        </section>
+
+        <section class="panel forestOnly">
+          <h2>Filters</h2>
+          <label>
+            Search
+            <input id="forestQueryInput" type="text" placeholder="sample/source/file" />
+          </label>
+          <div class="grid2">
+            <label>
+              Driver
+              <input id="forestDriverInput" type="text" placeholder="Logging" />
+            </label>
+            <label>
+              Region
+              <input id="forestRegionInput" type="text" placeholder="Europe" />
+            </label>
+          </div>
+          <div class="grid2">
+            <label>
+              Validation
+              <select id="forestValidationFilter">
+                <option value="">Any</option>
+                <option value="Valid">Valid</option>
+                <option value="Unclear">Unclear</option>
+                <option value="Wrong">Wrong</option>
+                <option value="Too old">Too old</option>
+              </select>
+            </label>
+            <label>
+              Nearest N
+              <input id="forestNearestInput" type="number" min="0" max="250" value="25" />
+            </label>
+          </div>
+          <button id="forestReloadBtn" class="primary">Load samples</button>
+        </section>
+
+        <section class="panel forestOnly">
+          <h2>Samples</h2>
+          <div class="forestPager">
+            <button id="forestPrevPageBtn" type="button">Prev</button>
+            <span id="forestPageMeta">0 / 0</span>
+            <button id="forestNextPageBtn" type="button">Next</button>
+          </div>
+          <div id="forestSamplesList" class="forestSamplesList"></div>
+        </section>
+
+        <section class="panel forestOnly">
+          <h2>Batch Hansen</h2>
+          <label>
+            Limit
+            <input id="forestBatchLimitInput" type="number" min="1" max="1000" value="10" />
+          </label>
+          <label class="toggle">
+            <input id="forestBatchTreecoverInput" type="checkbox" />
+            <span>treecover 2000</span>
+          </label>
+          <div class="row">
+            <button id="forestBatchHansenBtn" class="primary" type="button">Analyze filtered</button>
+            <button id="forestCancelBatchBtn" type="button" disabled>Cancel</button>
+          </div>
+          <div id="forestBatchStatus" class="meta">no batch job</div>
+        </section>
+
+        <section class="panel forestOnly">
+          <div class="panelTitleRow">
+            <h2>Map Debug</h2>
+            <div class="panelTitleActions">
+              <button id="forestCopyDebugBtn" type="button">Copy</button>
+              <button id="forestClearDebugBtn" type="button">Clear</button>
+            </div>
+          </div>
+          <div id="forestMapDebug" class="forestMapDebug">waiting for map events</div>
+        </section>
+
+        <section class="panel pipelineOnly">
+          <h2>KML</h2>
+          <div class="row">
+            <button id="loadDefaultBtn" class="primary">Открыть sample</button>
+            <label class="fileButton">
+              KML
+              <input id="kmlFileInput" type="file" accept=".kml" />
+            </label>
+          </div>
+          <label class="toggle">
+            <input id="polygonToggle" type="checkbox" checked />
+            <span>closed line as polygon</span>
+          </label>
+          <select id="geometrySelect"></select>
+          <div id="kmlMeta" class="meta"></div>
+        </section>
+
+        <section class="panel pipelineOnly">
+          <h2>AOI</h2>
+          <div class="grid2">
+            <label>
+              Segment, m
+              <input id="segmentLengthInput" type="number" min="250" step="250" value="2000" />
+            </label>
+            <label>
+              Context, m
+              <select id="contextSelect">
+                <option value="200">200</option>
+                <option value="500">500</option>
+              </select>
+            </label>
+          </div>
+          <button id="buildSegmentsBtn" class="primary">Build segments</button>
+          <select id="segmentSelect"></select>
+          <div id="segmentMeta" class="meta"></div>
+        </section>
+
+        <section class="panel pipelineOnly">
+          <h2>Sentinel-2</h2>
+          <div class="grid2">
+            <label>
+              Years
+              <input id="yearsInput" type="text" value="2023,2024,2025" />
+            </label>
+            <label>
+              Months
+              <input id="monthsInput" type="text" value="5,7,9" />
+            </label>
+          </div>
+          <label>
+            Max cloud, %
+            <input id="maxCloudInput" type="number" min="0" max="100" step="5" value="30" />
+          </label>
+          <button id="searchS2Btn" class="primary">Find best scenes</button>
+        </section>
+
+      </aside>
+
+      <section class="workspace">
+        <div id="map"></div>
+        <aside id="mapLayerPanel" class="mapLayerPanel">
+          <button id="mapLayerPanelOpen" class="mapLayerIconButton mapLayerPanelOpen" type="button" aria-expanded="false" title="Show layers" aria-label="Show layers">
+            <span></span>
+            <span></span>
+          </button>
+          <div class="mapLayerPanelBody">
+            <header class="mapLayerPanelHeader">
+              <h2>Layers</h2>
+              <button id="mapLayerPanelClose" class="mapLayerIconButton mapLayerPanelClose" type="button" aria-expanded="true" title="Hide layers" aria-label="Hide layers">
+                <span></span>
+                <span></span>
+              </button>
+            </header>
+            <section class="mapLayerGroup">
+              <h2>Base Map</h2>
+              <div class="overlayToggles">
+                <label class="toggle">
+                  <input id="baseLayerOsm" name="baseLayer" type="radio" value="osm" checked />
+                  <span>OSM</span>
+                </label>
+                <label class="toggle">
+                  <input id="baseLayerBlank" name="baseLayer" type="radio" value="blank" />
+                  <span>Blank</span>
+                </label>
+              </div>
+            </section>
+            <section class="mapLayerGroup forestOnly">
+              <h2>Forest Layers</h2>
+              <div class="overlayToggles">
+                <label class="toggle">
+                  <input id="forestShowSamplesToggle" type="checkbox" checked />
+                  <span>samples</span>
+                </label>
+                <label class="toggle">
+                  <input id="forestShowNearestToggle" type="checkbox" checked />
+                  <span>nearest</span>
+                </label>
+                <label class="toggle">
+                  <input id="forestShowPlotToggle" type="checkbox" checked />
+                  <span>plot</span>
+                </label>
+                <label class="toggle">
+                  <input id="forestShowAoiToggle" type="checkbox" checked />
+                  <span>AOI</span>
+                </label>
+                <label class="toggle">
+                  <input id="forestShowHansenToggle" type="checkbox" checked />
+                  <span>Hansen</span>
+                </label>
+                <label class="toggle">
+                  <input id="forestShowSentinelToggle" type="checkbox" checked />
+                  <span>Sentinel</span>
+                </label>
+              </div>
+              <label>
+                Hansen layer
+                <select id="forestHansenLayerSelect">
+                  <option value="dominant_year">dominant event</option>
+                  <option value="all_loss">all loss</option>
+                  <option value="treecover2000">treecover 2000</option>
+                </select>
+              </label>
+              <label>
+                Hansen opacity
+                <input id="forestHansenOpacityInput" type="range" min="0" max="100" value="72" />
+              </label>
+            </section>
+
+            <section class="mapLayerGroup pipelineOnly">
+              <h2>Pipeline Layers</h2>
+              <div class="row">
+                <button class="layerBtn" data-view="rgb">RGB</button>
+                <button class="layerBtn" data-view="false_color">NIR</button>
+                <button class="layerBtn" data-view="ndvi">NDVI</button>
+                <button class="layerBtn" data-view="ndmi">NDMI</button>
+              </div>
+              <label>
+                Opacity
+                <input id="overlayOpacity" type="range" min="0" max="100" value="82" />
+              </label>
+              <div class="overlayToggles">
+                <label class="toggle">
+                  <input id="showZoneToggle" type="checkbox" checked />
+                  <span>zone</span>
+                </label>
+                <label class="toggle">
+                  <input id="showCenterlineToggle" type="checkbox" checked />
+                  <span>centerline</span>
+                </label>
+                <label class="toggle">
+                  <input id="showSegmentsToggle" type="checkbox" checked />
+                  <span>segments</span>
+                </label>
+                <label class="toggle">
+                  <input id="showAoiToggle" type="checkbox" checked />
+                  <span>AOI square</span>
+                </label>
+              </div>
+            </section>
+          </div>
+        </aside>
+        <section class="drawer">
+          <div id="forestDrawer" class="forestOnly">
+            <div class="drawerHeader">
+              <div class="drawerTitleBlock">
+                <h2>Forest Sample</h2>
+                <div id="forestStatusLine" class="drawerStatus">ready</div>
+              </div>
+              <div class="observationActions">
+                <button id="forestExportBtn">Export filtered</button>
+                <button id="forestClearMapBtn">Clear forest map</button>
+              </div>
+            </div>
+            <div id="forestDetails" class="forestDetails"></div>
+            <div id="forestExportLinks" class="forestExportLinks"></div>
+          </div>
+
+          <div id="pipelineDrawer" class="pipelineOnly">
+            <div class="drawerHeader">
+              <h2>Observations</h2>
+              <div class="observationActions">
+                <label class="inlineCheck">
+                  <input id="selectAllObservations" type="checkbox" />
+                  <span>All</span>
+                </label>
+                <button id="downloadSelectedBtn">Load checked (0)</button>
+                <button id="clearRasterBtn">Clear raster</button>
+              </div>
+            </div>
+            <div id="statusLine" class="statusLine">ready</div>
+            <div id="observations" class="observations"></div>
+            <div id="previewGrid" class="previewGrid"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/frontend/app.js?v=forest-iter2-11"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-iter2-11"></script>
+  </body>
+</html>

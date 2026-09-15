@@ -1,0 +1,12 @@
+fastapi>=0.116
+uvicorn[standard]>=0.35
+pydantic>=2.11
+requests>=2.32
+numpy>=2.0
+shapely>=2.0
+pyproj>=3.7
+scikit-image>=0.25
+sqlalchemy>=2.0
+rasterio>=1.4
+pillow>=10.0
+python-multipart>=0.0.9

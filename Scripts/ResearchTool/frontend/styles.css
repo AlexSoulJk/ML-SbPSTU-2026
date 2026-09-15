@@ -1,0 +1,1457 @@
+:root {
+  --bg: #f6f7f2;
+  --panel: #ffffff;
+  --ink: #1f2a2b;
+  --muted: #63706f;
+  --line: #d9ddd4;
+  --brand: #25635a;
+  --brand-strong: #174a43;
+  --accent: #bf4f32;
+  --aoi: #e3ad32;
+  --shadow: 0 10px 30px rgba(28, 42, 43, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--bg);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #9bb3ad;
+}
+
+button.primary {
+  border-color: var(--brand);
+  color: #fff;
+  background: var(--brand);
+}
+
+button.primary:hover {
+  background: var(--brand-strong);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+
+label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+  height: 100vh;
+  min-height: 720px;
+  transition: grid-template-columns 0.18s ease;
+}
+
+.shell.sidebarCollapsed {
+  grid-template-columns: 54px minmax(0, 1fr);
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: #eef1ea;
+}
+
+.brand {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 8px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.brand p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sidebarToggle,
+.mapLayerIconButton {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.sidebarToggle span,
+.mapLayerIconButton span {
+  display: block;
+  width: 17px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.sidebarToggle {
+  color: var(--brand);
+}
+
+.sidebarToggle span + span,
+.mapLayerIconButton span + span {
+  margin-top: -2px;
+  margin-left: 6px;
+}
+
+.shell.sidebarCollapsed .sidebar {
+  align-items: center;
+  padding: 10px 6px;
+  overflow: hidden;
+}
+
+.shell.sidebarCollapsed .brand {
+  justify-content: center;
+  width: 100%;
+}
+
+.shell.sidebarCollapsed .brand div,
+.shell.sidebarCollapsed .modeSwitch,
+.shell.sidebarCollapsed .sidebar > .panel {
+  display: none !important;
+}
+
+.modeSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #dde7df;
+}
+
+.modeSwitch button {
+  border-color: transparent;
+  background: transparent;
+  font-weight: 750;
+}
+
+.modeSwitch button.active {
+  color: #fff;
+  background: var(--brand);
+}
+
+body[data-mode="forest"] .pipelineOnly,
+body[data-mode="pipeline"] .forestOnly {
+  display: none !important;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  color: #425251;
+}
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel.collapsed {
+  gap: 0;
+  padding-block: 8px;
+}
+
+.panel.collapsed .panelBody,
+.panel.collapsed .panelTitleActions {
+  display: none;
+}
+
+.panelCollapseTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #425251;
+  font-size: 13px;
+  font-weight: 750;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.panelCollapseTitle:hover {
+  border-color: transparent;
+}
+
+.panelCollapseTitle::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.16s ease;
+}
+
+.panel.collapsed .panelCollapseTitle::after {
+  transform: rotate(-45deg);
+}
+
+.panelCollapseRow {
+  align-items: center;
+}
+
+.panelCollapseRow .panelCollapseTitle {
+  flex: 1;
+  width: auto;
+}
+
+.panelTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panelTitleRow h2 {
+  margin: 0;
+}
+
+.panelTitleActions {
+  display: flex;
+  gap: 6px;
+}
+
+.panelTitleActions button,
+.panelTitleRow button:not(.panelCollapseTitle) {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.row > * {
+  flex: 1;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.toggle input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.overlayToggles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.overlayToggles .toggle {
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+textarea {
+  width: 100%;
+  margin-top: 5px;
+  padding: 7px 8px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.fileButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.fileButton input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.meta {
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: minmax(420px, 1fr) 290px;
+  min-width: 0;
+  position: relative;
+}
+
+#map {
+  min-width: 0;
+  min-height: 420px;
+}
+
+.mapLayerPanel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 900;
+  width: 34px;
+  height: 34px;
+  pointer-events: none;
+}
+
+.mapLayerIconButton {
+  display: inline-grid;
+  width: 34px;
+  min-width: 34px;
+  margin-left: 0;
+  border-color: #9bb3ad;
+  background: rgba(255, 255, 255, 0.96);
+  pointer-events: auto;
+}
+
+.mapLayerPanelOpen {
+  box-shadow: var(--shadow);
+}
+
+.mapLayerPanel:not(.collapsed) .mapLayerPanelOpen,
+.mapLayerPanel.collapsed .mapLayerPanelClose {
+  display: none;
+}
+
+.mapLayerPanelBody {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  gap: 10px;
+  width: min(270px, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(251, 252, 248, 0.97);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    visibility 0.14s ease;
+}
+
+.mapLayerPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mapLayerPanelHeader h2 {
+  margin: 0;
+  color: #425251;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.mapLayerPanel.collapsed .mapLayerPanelBody {
+  transform: translateX(10px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.mapLayerGroup {
+  display: grid;
+  gap: 10px;
+}
+
+.mapLayerGroup h2 {
+  margin: 0;
+  color: #425251;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.drawer {
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: #fbfcf8;
+}
+
+.drawerHeader {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcf8;
+}
+
+.drawerHeader h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.drawerTitleBlock {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.drawerStatus {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.observationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.inlineCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.inlineCheck input {
+  width: 15px;
+  min-height: 15px;
+  margin: 0;
+}
+
+.statusLine {
+  padding: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.observations {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+.observation {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.observation.downloaded {
+  border-color: #adc9bf;
+}
+
+.observation.active {
+  border-color: var(--aoi);
+  box-shadow: inset 0 0 0 1px var(--aoi);
+}
+
+.observation.unavailable {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.observationTop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.observationCheck {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+}
+
+.observationCheck input {
+  width: 16px;
+  min-height: 16px;
+  margin: 1px 0 0;
+}
+
+.observation strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.observation span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.observation .badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #edf1eb;
+  color: #425251;
+  font-size: 10px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.observation.downloaded .badge {
+  background: #e0eee7;
+  color: #25635a;
+}
+
+.observation button {
+  justify-self: start;
+}
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 10px;
+  padding: 0 14px 16px;
+}
+
+.preview {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.preview h3 {
+  margin: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.preview img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: #e7eae1;
+}
+
+.forestPager {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 72px;
+  gap: 8px;
+  align-items: center;
+}
+
+.forestPager span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.forestSamplesList {
+  display: grid;
+  gap: 8px;
+  max-height: 310px;
+  overflow: auto;
+}
+
+.forestSampleCard {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.forestSampleCard.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.forestSampleCard.pinned {
+  border-color: #86bbd8;
+  background: #f2f8fa;
+}
+
+.forestSampleCard strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.forestSavedShape {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.forestSampleCard span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.forestSampleCardJob {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent) !important;
+  font-weight: 750;
+}
+
+.forestPointIconWrapper {
+  border: 0;
+  background: transparent;
+}
+
+.forestPointIcon {
+  display: block;
+  box-shadow: 0 0 0 1px rgba(31, 42, 43, 0.12);
+}
+
+.forestDetails {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.forestNamePanel {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.forestNamePanel button {
+  min-width: 92px;
+}
+
+.forestDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.forestDetailGrid > div,
+.forestActionPanel,
+.rawProperties {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestPointInfo {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestPointInfo summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.forestPointInfo summary::-webkit-details-marker {
+  display: none;
+}
+
+.forestPointInfo summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  color: var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.16s ease;
+}
+
+.forestPointInfo[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.forestPointInfo[open] summary::after {
+  transform: rotate(-135deg);
+}
+
+.forestPointInfoTitle {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forestPointInfoTitle strong {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.forestPointInfoTitle span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.forestPointInfoBody {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.forestPointInfo .forestDetailGrid > div {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.forestPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.forestPanelHeader h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #425251;
+  text-transform: uppercase;
+}
+
+.forestInlineJob {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid #d9ddd4;
+  border-radius: 6px;
+  background: #fbfcf8;
+}
+
+.forestInlineJob strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.forestInlineJob span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.forestInlineJob button {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.forestSpinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  border: 2px solid #d4ded7;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+}
+
+.forestInlineJob.running .forestSpinner,
+.forestSampleCardJob .forestSpinner {
+  animation: forestSpin 0.75s linear infinite;
+}
+
+.forestInlineJob:not(.running) .forestSpinner {
+  border-color: #86a891;
+  background: #86a891;
+}
+
+@keyframes forestSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.forestMetrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.forestMetrics div {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+}
+
+.forestDetailGrid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.forestDetailGrid strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.forestMetrics span,
+.forestSceneGroup span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.forestMetrics strong,
+.forestSceneGroup strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.forestSentinelControls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.forestPanelToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.forestPanelToolbar button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.forestSceneGroups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.forestSceneGroup {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+}
+
+.forestSceneOption {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px;
+  align-items: start;
+  min-height: 28px;
+  padding: 5px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.forestSceneOption:hover {
+  background: #eef3eb;
+}
+
+.forestSceneOption input {
+  width: auto;
+  min-height: 0;
+  margin: 1px 0 0;
+}
+
+.forestPreviewPeriods {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.forestPreviewPeriod {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+}
+
+.forestPreviewPeriod h4 {
+  margin: 0;
+  color: #425251;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.forestPreviewRows {
+  display: grid;
+  gap: 8px;
+}
+
+.forestPreviewRow {
+  display: grid;
+  gap: 8px;
+}
+
+.forestPreviewLayers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 8px;
+  padding-left: 14px;
+  border-left: 2px solid #dfe6dc;
+}
+
+.forestPreviewCard {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+}
+
+.forestPreviewPrimary {
+  grid-template-columns: 82px minmax(0, 1fr) auto;
+}
+
+.forestPreviewPrimary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  color: var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.16s ease;
+}
+
+.forestPreviewPrimary.expanded::after {
+  transform: rotate(-135deg);
+}
+
+.forestPreviewLayer {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto;
+}
+
+.forestPreviewCard:hover,
+.forestPreviewCard.active {
+  border-color: #d45d3f;
+}
+
+.forestPreviewCard.active {
+  box-shadow: 0 0 0 2px rgba(212, 93, 63, 0.18);
+}
+
+.forestPreviewCard img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #edf0e9;
+}
+
+.forestPreviewText {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.forestPreviewCard strong,
+.forestPreviewCard span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.forestPreviewCard strong {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.forestPreviewCard span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.forestPreviewEmpty {
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: #fff;
+  font-size: 12px;
+}
+
+.forestValidation {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rawProperties summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.rawProperties pre {
+  max-height: 220px;
+  margin: 10px 0 0;
+  overflow: auto;
+  color: #334240;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.forestExportLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.forestExportLinks a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--brand);
+  border-radius: 6px;
+  color: var(--brand);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.emptyState {
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fbfcf8;
+  font-size: 12px;
+}
+
+.forestMapDebug {
+  display: grid;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.forestMapDebug div {
+  padding-bottom: 5px;
+  border-bottom: 1px solid #e5e8df;
+}
+
+.forestMapDebug div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.forestMapDebug strong {
+  color: var(--ink);
+}
+
+.forestMapDebug span {
+  color: #6f7d7b;
+  overflow-wrap: anywhere;
+}
+
+.leaflet-container {
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-x pan-y;
+}
+
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.leaflet-container img.leaflet-tile,
+.leaflet-container img.leaflet-image-layer {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.leaflet-tile {
+  visibility: hidden;
+}
+
+.leaflet-tile-loaded {
+  visibility: inherit;
+}
+
+.leaflet-zoom-animated {
+  transform-origin: 0 0;
+}
+
+.leaflet-interactive {
+  cursor: pointer;
+}
+
+.leaflet-pane {
+  z-index: 400;
+}
+
+.leaflet-tile-pane {
+  z-index: 200;
+}
+
+.leaflet-overlay-pane {
+  z-index: 400;
+}
+
+.leaflet-shadow-pane {
+  z-index: 500;
+}
+
+.leaflet-marker-pane {
+  z-index: 600;
+}
+
+.leaflet-tooltip-pane {
+  z-index: 650;
+}
+
+.leaflet-popup-pane {
+  z-index: 700;
+}
+
+.leaflet-map-pane canvas {
+  z-index: 100;
+}
+
+.leaflet-map-pane svg {
+  z-index: 200;
+}
+
+.leaflet-image-layer {
+  z-index: 1;
+}
+
+.leaflet-control-container .leaflet-top,
+.leaflet-control-container .leaflet-bottom {
+  position: absolute;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.leaflet-top {
+  top: 0;
+}
+
+.leaflet-right {
+  right: 0;
+}
+
+.leaflet-bottom {
+  bottom: 0;
+}
+
+.leaflet-left {
+  left: 0;
+}
+
+.leaflet-control {
+  position: relative;
+  z-index: 800;
+  clear: both;
+  pointer-events: auto;
+}
+
+.leaflet-left .leaflet-control {
+  float: left;
+  margin-left: 10px;
+}
+
+.leaflet-right .leaflet-control {
+  float: right;
+  margin-right: 10px;
+}
+
+.leaflet-top .leaflet-control {
+  margin-top: 10px;
+}
+
+.leaflet-bottom .leaflet-control {
+  margin-bottom: 10px;
+}
+
+.leaflet-control-zoom {
+  overflow: hidden;
+  border: 1px solid rgba(31, 42, 43, 0.22);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(31, 42, 43, 0.16);
+}
+
+.leaflet-control-zoom a {
+  display: block;
+  width: 30px;
+  height: 30px;
+  line-height: 30px;
+  color: var(--ink);
+  background: #fff;
+  text-align: center;
+  text-decoration: none;
+}
+
+.leaflet-control-zoom a + a {
+  border-top: 1px solid var(--line);
+}
+
+.leaflet-control-attribution {
+  padding: 4px 6px;
+  border: 1px solid rgba(31, 42, 43, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(31, 42, 43, 0.12);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.leaflet-control-attribution a {
+  color: var(--brand);
+}
+
+.leaflet-container {
+  background: #dce5de;
+}
+
+@media (max-width: 980px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: auto;
+  }
+
+  .sidebar {
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .workspace {
+    height: 820px;
+  }
+
+  .previewGrid {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
+
+  .forestValidation {
+    grid-template-columns: 1fr;
+  }
+
+  .forestNamePanel {
+    grid-template-columns: 1fr;
+  }
+
+  .forestSentinelControls {
+    grid-template-columns: 1fr;
+  }
+}

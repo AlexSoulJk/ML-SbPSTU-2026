@@ -1,0 +1,111 @@
+{
+  "created_at_utc": "2026-09-10T12:19:04.031623+00:00",
+  "source": {
+    "token_url": "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+    "process_url": "https://sh.dataspace.copernicus.eu/process/v1",
+    "catalog_url": "https://sh.dataspace.copernicus.eu/catalog/v1/search"
+  },
+  "output_dir": "C:\\Users\\Hp\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\\u0443\u0447\u0451\u0431\u0430\\ML\\ML-SbPSTU-2026\\TestData\\Init",
+  "width": 256,
+  "height": 256,
+  "bbox_crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+  "areas": [
+    {
+      "name": "spb_polytech",
+      "bbox": [
+        30.352,
+        59.998,
+        30.392,
+        60.025
+      ],
+      "description": "Saint Petersburg, Polytechnical University area"
+    }
+  ],
+  "time_windows": [
+    {
+      "name": "spring_2024",
+      "start": "2024-05-15",
+      "end": "2024-05-31"
+    }
+  ],
+  "items": [
+    {
+      "area": "spb_polytech",
+      "time_window": "spring_2024",
+      "collection": "sentinel-2-l2a",
+      "bands": [
+        "B02",
+        "B03",
+        "B04",
+        "B08",
+        "dataMask"
+      ],
+      "path": "C:\\Users\\Hp\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\\u0443\u0447\u0451\u0431\u0430\\ML\\ML-SbPSTU-2026\\TestData\\Init\\spb_polytech_spring_2024_s2_l2a_b02_b03_b04_b08_mask.tif",
+      "status": "planned",
+      "process_request": {
+        "input": {
+          "bounds": {
+            "bbox": [
+              30.352,
+              59.998,
+              30.392,
+              60.025
+            ],
+            "properties": {
+              "crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
+            }
+          },
+          "data": [
+            {
+              "type": "sentinel-2-l2a",
+              "dataFilter": {
+                "timeRange": {
+                  "from": "2024-05-15T00:00:00Z",
+                  "to": "2024-05-31T23:59:59Z"
+                },
+                "mosaickingOrder": "leastCC",
+                "maxCloudCoverage": 80
+              }
+            }
+          ]
+        },
+        "output": {
+          "width": 256,
+          "height": 256,
+          "responses": [
+            {
+              "identifier": "default",
+              "format": {
+                "type": "image/tiff"
+              }
+            }
+          ]
+        },
+        "evalscript": "//VERSION=3\nfunction setup() {\n  return {\n    input: [{\n      bands: [\"B02\", \"B03\", \"B04\", \"B08\", \"dataMask\"],\n      units: \"DN\"\n    }],\n    output: {\n      id: \"default\",\n      bands: 5,\n      sampleType: \"UINT16\"\n    }\n  };\n}\n\nfunction evaluatePixel(sample) {\n  return [sample.B02, sample.B03, sample.B04, sample.B08, sample.dataMask];\n}"
+      },
+      "catalog_request": {
+        "bbox": [
+          30.352,
+          59.998,
+          30.392,
+          60.025
+        ],
+        "datetime": "2024-05-15T00:00:00Z/2024-05-31T23:59:59Z",
+        "collections": [
+          "sentinel-2-l2a"
+        ],
+        "limit": 5,
+        "fields": {
+          "include": [
+            "id",
+            "properties.datetime",
+            "properties.eo:cloud_cover",
+            "properties.s1:polarization",
+            "properties.sar:instrument_mode"
+          ],
+          "exclude": []
+        }
+      }
+    }
+  ]
+}
