@@ -6,3 +6,5 @@ __pycache__/
 Scripts/ResearchTool/Data/cache/
 Scripts/ResearchTool/Data/processed/
 Scripts/ResearchTool/Data/*.log
+Specs
+*.kml
