@@ -25,6 +25,13 @@ ProgressCallback = Callable[[str, str], None]
 CancelCallback = Callable[[], bool]
 TOO_OLD_EVENT_YEAR_CUTOFF = 2016
 
+def existing_hansen_analysis(db: Session, sample_id: str) -> HansenAnalysis | None:
+    return db.scalar(
+        select(HansenAnalysis)
+        .where(HansenAnalysis.sample_id == sample_id)
+        .order_by(HansenAnalysis.created_at.desc())
+        .limit(1)
+    )
 
 def report(progress: ProgressCallback | None, stage: str, message: str) -> None:
     if progress:
@@ -210,9 +217,20 @@ def analyze_sample_hansen(
     sample: Sample,
     *,
     include_treecover: bool = False,
+    skip_existing: bool = True,
     progress: ProgressCallback | None = None,
     should_cancel: CancelCallback | None = None,
 ) -> dict[str, Any]:
+    if skip_existing:
+        existing = existing_hansen_analysis(db, sample.sample_id)
+        if existing is not None:
+            report(
+                progress,
+                "done",
+                f"Hansen already exists for {sample.sample_id[:8]}, skipping",
+            )
+            return latest_hansen_payload(db, sample.sample_id) or {}
+
     report(progress, "loading", f"Loading sample {sample.sample_id[:8]}")
     raise_if_cancelled(should_cancel)
 

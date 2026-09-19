@@ -8,3 +8,4 @@ Scripts/ResearchTool/Data/processed/
 Scripts/ResearchTool/Data/*.log
 Specs
 *.kml
+Scripts/ResearchScripts/Outputs
