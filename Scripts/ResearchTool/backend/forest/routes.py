@@ -30,6 +30,7 @@ from .sentinel_service import (
 router = APIRouter(prefix="/api/forest", tags=["forest"])
 
 MANUAL_VALIDATION_VALUES = {"Valid", "Unclear", "Wrong", "Too old"}
+VALID_FOR_NEW_SEARCH_FILTER = "__valid_for_new_search"
 HANSEN_SAMPLE_JOB_TOTAL = 5
 HANSEN_STAGE_PROGRESS = {
     "queued": 0,
@@ -175,14 +176,34 @@ def sample_conditions(
     if region:
         conditions.append(Sample.region == region)
     if manual_validation:
-        conditions.append(ManualValidation.validation == manual_validation)
+        if manual_validation == VALID_FOR_NEW_SEARCH_FILTER:
+            manual_too_old = (
+                select(ManualValidation.sample_id)
+                .where(
+                    ManualValidation.sample_id == Sample.sample_id,
+                    ManualValidation.validation == "Too old",
+                )
+                .exists()
+            )
+            hansen_too_old = (
+                select(SampleStatus.sample_id)
+                .where(
+                    SampleStatus.sample_id == Sample.sample_id,
+                    SampleStatus.source == "hansen",
+                    SampleStatus.status == "TOO_OLD",
+                )
+                .exists()
+            )
+            conditions.extend([~manual_too_old, ~hansen_too_old])
+        else:
+            conditions.append(ManualValidation.validation == manual_validation)
     return conditions
 
 
 def samples_select(filters: dict[str, Any], *, count: bool = False) -> Any:
     manual_validation = filters.get("manual_validation")
     stmt = select(func.count()).select_from(Sample) if count else select(Sample)
-    if manual_validation:
+    if manual_validation and manual_validation != VALID_FOR_NEW_SEARCH_FILTER:
         stmt = stmt.join(ManualValidation, ManualValidation.sample_id == Sample.sample_id)
     conditions = sample_conditions(
         q=filters.get("q"),
