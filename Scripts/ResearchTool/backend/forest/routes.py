@@ -19,7 +19,7 @@ from .geometry import DEFAULT_SAMPLE_PLOT_M, DEFAULT_VIEWER_AOI_M, haversine_m, 
 from .hansen_service import analyze_sample_hansen, latest_hansen_payload
 from .import_service import import_file
 from .jobs import jobs
-from .models import ForestExport, ManualValidation, Sample, SampleStatus, utc_now
+from .models import ForestExport, ManualValidation, Sample, SampleStatus, utc_now, HansenAnalysis
 from .sentinel_service import (
     download_sentinel_for_sample,
     latest_sentinel_payload,
@@ -72,6 +72,7 @@ class HansenBatchRequest(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
     limit: int = Field(default=10, ge=1, le=1000)
     include_treecover: bool = False
+    skip_existing: bool = True
 
 
 class ExportRequest(BaseModel):
@@ -703,10 +704,21 @@ def analyze_hansen_batch(
     request: HansenBatchRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    sample_ids = [
-        sample.sample_id
-        for sample in read_filtered_samples(db, request.filters)[: request.limit]
-    ]
+    # sample_ids = [
+    #     sample.sample_id
+    #     for sample in read_filtered_samples(db, request.filters)[: request.limit]
+    # ]
+    samples = read_filtered_samples(db, request.filters)
+
+    if request.skip_existing:
+        existing_ids = set(
+            db.scalars(
+                select(HansenAnalysis.sample_id).distinct()
+            )
+        )
+        samples = [s for s in samples if s.sample_id not in existing_ids]
+
+    sample_ids = [s.sample_id for s in samples[: request.limit]]
     if not sample_ids:
         raise HTTPException(status_code=400, detail="No samples matched batch filters.")
 
