@@ -1,4 +1,4 @@
-import { api } from "./api.js?v=forest-iter2-11";
+import { api } from "./api.js?v=forest-iter2-12";
 
 function cleanFilters(filters) {
   return Object.fromEntries(
