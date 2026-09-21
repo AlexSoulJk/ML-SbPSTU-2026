@@ -6,6 +6,7 @@ import requests
 
 from ..config import FOREST_HANSEN_CACHE_DIR
 from .models import HansenTile
+from .storage_paths import to_storage_path
 
 
 HANSEN_VERSION = "GFC-2025-v1.13"
@@ -49,7 +50,7 @@ def download_hansen_tile(
     if local_path.exists():
         if progress:
             progress("cache", f"{layer}: cache hit for {tile_id}")
-        return str(local_path)
+        return to_storage_path(local_path) or str(local_path)
 
     local_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = local_path.with_suffix(".tif.tmp")
@@ -88,7 +89,7 @@ def download_hansen_tile(
     tmp_path.replace(local_path)
     if progress:
         progress("cache", f"{layer}: cached {tile_id}")
-    return str(local_path)
+    return to_storage_path(local_path) or str(local_path)
 
 
 def tile_model(layer: str, tile_id: str, local_path: str) -> HansenTile:
@@ -96,5 +97,5 @@ def tile_model(layer: str, tile_id: str, local_path: str) -> HansenTile:
         layer=layer,
         tile_id=tile_id,
         version=HANSEN_VERSION,
-        local_path=local_path,
+        local_path=to_storage_path(local_path) or local_path,
     )

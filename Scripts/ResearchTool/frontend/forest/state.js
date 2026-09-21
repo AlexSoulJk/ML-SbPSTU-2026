@@ -38,6 +38,7 @@ export const forestState = {
   sentinelSelectedSceneKeys: new Set(),
   sentinelExpandedDownloadKeys: new Set(),
   activeSentinelPreview: null,
+  sentinelImageIdQuery: "",
   hansenJobId: null,
   hansenJobSampleId: null,
   hansenJob: null,

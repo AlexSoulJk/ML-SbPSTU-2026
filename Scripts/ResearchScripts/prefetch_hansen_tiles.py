@@ -31,6 +31,7 @@ from backend.forest.hansen_provider import (
     tile_id_for_lonlat,
 )
 from backend.forest.models import HansenTile, Sample
+from backend.forest.storage_paths import to_storage_path
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -86,7 +87,7 @@ def planned_tile_rows(db) -> list[dict[str, object]]:
             record_exists = record is not None
 
             if file_exists and not record_exists and not DRY_RUN:
-                upsert_tile_record(db, layer, tile_id, str(expected_path))
+                upsert_tile_record(db, layer, tile_id, to_storage_path(expected_path) or str(expected_path))
 
             action = "skip_cached" if file_exists else "download"
             if file_exists and not record_exists:
@@ -99,7 +100,7 @@ def planned_tile_rows(db) -> list[dict[str, object]]:
                     "sample_count": sample_count,
                     "file_exists": file_exists,
                     "record_exists": record_exists,
-                    "local_path": str(expected_path),
+                    "local_path": to_storage_path(expected_path) or str(expected_path),
                     "action": action,
                 }
             )

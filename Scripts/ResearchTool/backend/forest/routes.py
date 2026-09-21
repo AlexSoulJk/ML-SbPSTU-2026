@@ -19,17 +19,42 @@ from .geometry import DEFAULT_SAMPLE_PLOT_M, DEFAULT_VIEWER_AOI_M, haversine_m, 
 from .hansen_service import analyze_sample_hansen, latest_hansen_payload
 from .import_service import import_file
 from .jobs import jobs
-from .models import ForestExport, ManualValidation, Sample, SampleStatus, utc_now, HansenAnalysis
+from .models import (
+    ForestExport,
+    HansenAnalysis,
+    ManualValidation,
+    Sample,
+    SampleStatus,
+    SentinelDownload,
+    SentinelSceneReview,
+    utc_now,
+)
 from .sentinel_service import (
     download_sentinel_for_sample,
     latest_sentinel_payload,
     search_sentinel_for_sample,
+    sentinel_review_payload,
 )
+from .storage_paths import resolve_storage_path, to_storage_path
 
 
 router = APIRouter(prefix="/api/forest", tags=["forest"])
 
 MANUAL_VALIDATION_VALUES = {"Valid", "Unclear", "Wrong", "Too old"}
+SENTINEL_REVIEW_REASON_CODES = {
+    "CLOUDS",
+    "CLOUD_SHADOW",
+    "HAZE_OR_SMOKE",
+    "SNOW_OR_ICE",
+    "SEASON_MISMATCH",
+    "TOO_DARK_OR_LOW_CONTRAST",
+    "NO_DATA_OR_BLACK_PIXELS",
+    "AOI_NOT_COVERED",
+    "GEOREGISTRATION_SHIFT",
+    "WRONG_EVENT_WINDOW",
+    "PREVIEW_OR_PROCESSING_ARTIFACT",
+    "OTHER",
+}
 VALID_FOR_NEW_SEARCH_FILTER = "__valid_for_new_search"
 HANSEN_SAMPLE_JOB_TOTAL = 5
 HANSEN_STAGE_PROGRESS = {
@@ -63,6 +88,13 @@ class SentinelDownloadRequest(BaseModel):
     item: dict[str, Any]
     period: str | None = None
     max_cloud: float = Field(default=30.0, ge=0.0, le=100.0)
+
+
+class SentinelReviewRequest(BaseModel):
+    is_excluded: bool = False
+    reason_code: str | None = Field(default=None, max_length=64)
+    reason_text: str | None = None
+    notes: str | None = None
 
 
 class HansenAnalysisRequest(BaseModel):
@@ -154,6 +186,7 @@ def sample_detail(sample: Sample, db: Session) -> dict[str, Any]:
 def sample_conditions(
     *,
     q: str | None = None,
+    id_q: str | None = None,
     driver: str | None = None,
     confidence: str | None = None,
     region: str | None = None,
@@ -168,6 +201,14 @@ def sample_conditions(
                 Sample.display_name.ilike(pattern),
                 Sample.source_id.ilike(pattern),
                 Sample.source_file.ilike(pattern),
+            )
+        )
+    if id_q:
+        pattern = f"%{id_q}%"
+        conditions.append(
+            or_(
+                Sample.sample_id.ilike(pattern),
+                Sample.source_id.ilike(pattern),
             )
         )
     if driver:
@@ -208,6 +249,7 @@ def samples_select(filters: dict[str, Any], *, count: bool = False) -> Any:
         stmt = stmt.join(ManualValidation, ManualValidation.sample_id == Sample.sample_id)
     conditions = sample_conditions(
         q=filters.get("q"),
+        id_q=filters.get("id_q"),
         driver=filters.get("driver"),
         confidence=filters.get("confidence"),
         region=filters.get("region"),
@@ -411,6 +453,7 @@ def list_samples(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     q: str | None = None,
+    id_q: str | None = None,
     driver: str | None = None,
     confidence: str | None = None,
     region: str | None = None,
@@ -420,6 +463,7 @@ def list_samples(
 ) -> dict[str, Any]:
     filters = {
         "q": q,
+        "id_q": id_q,
         "driver": driver,
         "confidence": confidence,
         "region": region,
@@ -429,7 +473,11 @@ def list_samples(
     page_stmt = samples_select(filters).limit(limit).offset(offset)
     samples = list(db.scalars(page_stmt))
 
-    selected = db.get(Sample, selected_id) if selected_id else None
+    selected = (
+        db.scalar(samples_select(filters).where(Sample.sample_id == selected_id).limit(1))
+        if selected_id
+        else None
+    )
     nearest: list[dict[str, Any]] = []
     if selected is not None and nearest_n > 0:
         candidates = read_filtered_samples(db, filters)
@@ -599,8 +647,8 @@ def create_export(request: ExportRequest, db: Session = Depends(get_db)) -> dict
         ForestExport(
             export_id=export_id,
             scope=request.scope,
-            csv_path=str(csv_path),
-            geojson_path=str(geojson_path),
+            csv_path=to_storage_path(csv_path) or str(csv_path),
+            geojson_path=to_storage_path(geojson_path) or str(geojson_path),
             sample_count=len(samples),
             filters_json=json.dumps(filters, ensure_ascii=False, sort_keys=True),
         )
@@ -655,7 +703,7 @@ def get_export(
     export = db.get(ForestExport, export_id)
     if export is None:
         raise HTTPException(status_code=404, detail="Export was not found.")
-    path = Path(export.csv_path if format == "csv" else export.geojson_path)
+    path = resolve_storage_path(export.csv_path if format == "csv" else export.geojson_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Export file is missing on disk.")
     media_type = "text/csv" if format == "csv" else "application/geo+json"
@@ -805,3 +853,71 @@ def sentinel_download(
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def clean_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+@router.get("/sentinel/downloads/{download_id}/review")
+def get_sentinel_review(download_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    download = db.get(SentinelDownload, download_id)
+    if download is None:
+        raise HTTPException(status_code=404, detail="Sentinel download was not found.")
+
+    review = db.scalar(
+        select(SentinelSceneReview).where(SentinelSceneReview.download_id == download_id)
+    )
+    return {
+        "download_id": download_id,
+        "review": sentinel_review_payload(review),
+    }
+
+
+@router.put("/sentinel/downloads/{download_id}/review")
+def save_sentinel_review(
+    download_id: str,
+    request: SentinelReviewRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    download = db.get(SentinelDownload, download_id)
+    if download is None:
+        raise HTTPException(status_code=404, detail="Sentinel download was not found.")
+
+    reason_code = clean_optional_text(request.reason_code)
+    reason_text = clean_optional_text(request.reason_text)
+    notes = clean_optional_text(request.notes)
+
+    if request.is_excluded and reason_code:
+        if reason_code not in SENTINEL_REVIEW_REASON_CODES:
+            allowed = ", ".join(sorted(SENTINEL_REVIEW_REASON_CODES))
+            raise HTTPException(status_code=400, detail=f"reason_code must be one of: {allowed}")
+        if reason_code == "OTHER" and not reason_text:
+            raise HTTPException(status_code=400, detail="reason_text is required when reason_code is OTHER.")
+    if not request.is_excluded:
+        reason_code = None
+        reason_text = None
+        notes = None
+
+    review = db.scalar(
+        select(SentinelSceneReview).where(SentinelSceneReview.download_id == download_id)
+    )
+    if review is None:
+        review = SentinelSceneReview(download_id=download_id)
+        db.add(review)
+
+    review.is_excluded = request.is_excluded
+    review.reason_code = reason_code
+    review.reason_text = reason_text
+    review.notes = notes
+    review.updated_at = utc_now()
+
+    db.commit()
+    db.refresh(review)
+    return {
+        "download_id": download_id,
+        "review": sentinel_review_payload(review),
+    }

@@ -71,6 +71,20 @@ def path_kind(value: str | None) -> str:
     return "absolute" if is_abs_path(value) else "relative"
 
 
+def resolve_project_path(value: str | None) -> Path | None:
+    if not value:
+        return None
+    path = Path(value)
+    if is_abs_path(value):
+        return path
+    return PROJECT_ROOT / path
+
+
+def path_exists_here(value: str | None) -> bool | str:
+    path = resolve_project_path(value)
+    return path.exists() if path is not None else ""
+
+
 def csv_safe(value: Any) -> Any:
     if value is None:
         return ""
@@ -378,8 +392,8 @@ def compare_hansen_tiles(
                 "colleague_path": csv_safe(colleague_path),
                 "local_path_kind": path_kind(local_path),
                 "colleague_path_kind": path_kind(colleague_path),
-                "local_file_exists_here": Path(local_path).exists() if local_path else "",
-                "colleague_file_exists_here": Path(colleague_path).exists() if colleague_path else "",
+                "local_file_exists_here": path_exists_here(local_path),
+                "colleague_file_exists_here": path_exists_here(colleague_path),
                 "local_downloaded_at": csv_safe(left.get("downloaded_at") if left else None),
                 "colleague_downloaded_at": csv_safe(right.get("downloaded_at") if right else None),
             }

@@ -15,10 +15,11 @@ from rasterio.warp import transform_bounds, transform_geom
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import FOREST_CACHE_DIR, FOREST_HANSEN_CACHE_DIR
+from ..config import FOREST_HANSEN_CACHE_DIR
 from .geometry import DEFAULT_SAMPLE_PLOT_M, sample_geometries
 from .hansen_provider import HANSEN_VERSION, download_hansen_tile, tile_id_for_lonlat, tile_model
 from .models import HansenAnalysis, HansenMask, HansenTile, Sample, SampleStatus, utc_now
+from .storage_paths import forest_cache_url, resolve_storage_path, to_storage_path
 
 
 ProgressCallback = Callable[[str, str], None]
@@ -116,11 +117,7 @@ def write_png(path: Path, rgba: np.ndarray) -> None:
 
 
 def cache_url(path: Path) -> str | None:
-    try:
-        relative = path.relative_to(FOREST_CACHE_DIR)
-    except ValueError:
-        return None
-    return "/cache/forest/" + "/".join(relative.parts)
+    return forest_cache_url(path)
 
 
 def status_for_loss(total_loss_area_ha: float, dominant_area_ha: float, share: float) -> str:
@@ -142,7 +139,7 @@ def upsert_tile(db: Session, layer: str, tile_id: str, local_path: str) -> None:
     if existing is None:
         db.add(tile_model(layer, tile_id, local_path))
         return
-    existing.local_path = local_path
+    existing.local_path = to_storage_path(local_path) or local_path
 
 
 def upsert_hansen_status(
@@ -167,7 +164,7 @@ def upsert_hansen_status(
 
 
 def read_masked_layer(path: str, geometry_lonlat: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
-    with rasterio.open(path) as dataset:
+    with rasterio.open(resolve_storage_path(path)) as dataset:
         geometry = geometry_lonlat
         if dataset.crs and str(dataset.crs).upper() not in {"EPSG:4326", "OGC:CRS84"}:
             geometry = transform_geom("EPSG:4326", dataset.crs, geometry_lonlat)
@@ -204,7 +201,7 @@ def latest_hansen_payload(db: Session, sample_id: str) -> dict[str, Any] | None:
                 "mask_id": mask.mask_id,
                 "mask_type": mask.mask_type,
                 "local_path": mask.local_path,
-                "png_url": cache_url(Path(mask.local_path).with_suffix(".png")),
+                "png_url": cache_url(resolve_storage_path(mask.local_path).with_suffix(".png")),
                 "bbox": json.loads(mask.bbox_json),
             }
             for mask in masks
@@ -364,7 +361,7 @@ def analyze_sample_hansen(
                 sample_id=sample.sample_id,
                 analysis_id=analysis_id,
                 mask_type=mask_type,
-                local_path=str(tif_path),
+                local_path=to_storage_path(tif_path) or str(tif_path),
                 bbox_json=json.dumps(layer_bbox),
             )
         )

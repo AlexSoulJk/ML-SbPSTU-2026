@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..config import FOREST_IMPORTS_DIR
+from .storage_paths import to_storage_path
 from .models import ImportBatch, Sample
 
 
@@ -312,7 +313,7 @@ def import_file(
     batch = ImportBatch(
         import_id=import_id,
         original_filename=filename,
-        stored_path=str(stored_path),
+        stored_path=to_storage_path(stored_path) or str(stored_path),
         source_format=source_format,
         imported_count=imported_count,
         duplicate_count=duplicate_count,
@@ -325,7 +326,7 @@ def import_file(
     return {
         "import_id": import_id,
         "filename": filename,
-        "stored_path": str(stored_path),
+        "stored_path": to_storage_path(stored_path) or str(stored_path),
         "source_format": source_format,
         "imported_count": imported_count,
         "duplicate_count": duplicate_count,

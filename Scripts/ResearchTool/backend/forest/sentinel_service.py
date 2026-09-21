@@ -22,9 +22,10 @@ from ..cdse_client import (
     stac_search_s2,
     tight_time_range,
 )
-from ..config import FOREST_CACHE_DIR, FOREST_DERIVED_CACHE_DIR, FOREST_SENTINEL_RASTER_CACHE_DIR
+from ..config import FOREST_DERIVED_CACHE_DIR, FOREST_SENTINEL_RASTER_CACHE_DIR
 from .geometry import sample_geometries
-from .models import DerivedPreview, Sample, SentinelDownload, SentinelSearch
+from .models import DerivedPreview, Sample, SentinelDownload, SentinelSceneReview, SentinelSearch
+from .storage_paths import forest_cache_url, to_storage_path
 
 
 SEASON_PRESETS = {
@@ -178,11 +179,7 @@ def pixel_size_for_bbox(bbox: list[float]) -> tuple[int, int]:
 
 
 def cache_url(path: Path) -> str | None:
-    try:
-        relative = path.relative_to(FOREST_CACHE_DIR)
-    except ValueError:
-        return None
-    return "/cache/forest/" + "/".join(relative.parts)
+    return forest_cache_url(path)
 
 
 def save_bytes(path: Path, content: bytes) -> None:
@@ -301,7 +298,7 @@ def preview_metadata(
 ) -> dict[str, Any]:
     return {
         "view": view,
-        "path": str(path),
+        "path": to_storage_path(path),
         "url": cache_url(path),
         "bbox": bbox,
         "width": width,
@@ -383,19 +380,21 @@ def derive_previews(
         )
         preview_id = stable_id({"download_id": download_id, "view": view})
         existing = db.get(DerivedPreview, preview_id)
+        storage_png_path = to_storage_path(png_path)
+        storage_json_path = to_storage_path(json_path)
         if existing is None:
             db.add(
                 DerivedPreview(
                     preview_id=preview_id,
                     download_id=download_id,
                     view=view,
-                    png_path=str(png_path),
-                    metadata_path=str(json_path),
+                    png_path=storage_png_path,
+                    metadata_path=storage_json_path,
                 )
             )
         else:
-            existing.png_path = str(png_path)
-            existing.metadata_path = str(json_path)
+            existing.png_path = storage_png_path
+            existing.metadata_path = storage_json_path
         metadata.append(preview)
     return metadata
 
@@ -471,7 +470,7 @@ def download_sentinel_for_sample(
                 "width": width,
                 "height": height,
                 "bands": S2_BANDS,
-                "path": str(tif_path),
+                "path": to_storage_path(tif_path),
                 "content_type": content_type,
                 "bytes": len(content),
                 "request": payload,
@@ -490,20 +489,21 @@ def download_sentinel_for_sample(
     )
 
     existing = db.get(SentinelDownload, download_id)
+    storage_tif_path = to_storage_path(tif_path)
     if existing is None:
         existing = SentinelDownload(
             download_id=download_id,
             sample_id=sample.sample_id,
             scene_id=item["id"],
             period=period,
-            local_path=str(tif_path),
+            local_path=storage_tif_path,
             bbox_json=json.dumps(bbox),
             bands_json=json.dumps(S2_BANDS),
             metadata_json=json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         )
         db.add(existing)
     existing.period = period
-    existing.local_path = str(tif_path)
+    existing.local_path = storage_tif_path
     existing.bbox_json = json.dumps(bbox)
     existing.bands_json = json.dumps(S2_BANDS)
     existing.cloud_fraction = float(metrics["cloud_fraction"])
@@ -522,7 +522,7 @@ def download_sentinel_for_sample(
         "width": width,
         "height": height,
         "bands": S2_BANDS,
-        "local_path": str(tif_path),
+        "local_path": storage_tif_path,
         "cache_status": cache_status,
         "cloud_fraction": metrics["cloud_fraction"],
         "shadow_fraction": metrics["shadow_fraction"],
@@ -531,9 +531,23 @@ def download_sentinel_for_sample(
     }
 
 
+def sentinel_review_payload(review: SentinelSceneReview | None) -> dict[str, Any]:
+    return {
+        "is_excluded": bool(review.is_excluded) if review is not None else False,
+        "reason_code": review.reason_code if review is not None else None,
+        "reason_text": review.reason_text if review is not None else None,
+        "notes": review.notes if review is not None else None,
+        "created_at": review.created_at.isoformat() if review is not None and review.created_at else None,
+        "updated_at": review.updated_at.isoformat() if review is not None and review.updated_at else None,
+    }
+
+
 def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[str, Any]:
     previews = list(
         db.scalars(select(DerivedPreview).where(DerivedPreview.download_id == download.download_id))
+    )
+    review = db.scalar(
+        select(SentinelSceneReview).where(SentinelSceneReview.download_id == download.download_id)
     )
     metadata = json.loads(download.metadata_json)
     return {
@@ -548,11 +562,12 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         "cloud_fraction": download.cloud_fraction,
         "shadow_fraction": download.shadow_fraction,
         "is_bad_cloud": download.is_bad_cloud,
+        "review": sentinel_review_payload(review),
         "previews": [
             {
                 "view": preview.view,
                 "path": preview.png_path,
-                "url": cache_url(Path(preview.png_path)),
+                "url": forest_cache_url(preview.png_path),
                 "bbox": json.loads(download.bbox_json),
             }
             for preview in previews

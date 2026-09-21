@@ -1,4 +1,4 @@
-import { api } from "./api.js?v=forest-iter2-12";
+import { api } from "./api.js?v=forest-iter2-15";
 
 function cleanFilters(filters) {
   return Object.fromEntries(
@@ -80,6 +80,13 @@ export async function downloadSentinel(sampleId, options) {
   return api(`/api/forest/samples/${sampleId}/sentinel/download`, {
     method: "POST",
     body: options,
+  });
+}
+
+export async function saveSentinelReview(downloadId, payload) {
+  return api(`/api/forest/sentinel/downloads/${downloadId}/review`, {
+    method: "PUT",
+    body: payload,
   });
 }
 
