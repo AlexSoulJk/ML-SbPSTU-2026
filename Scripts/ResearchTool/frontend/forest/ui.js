@@ -1,4 +1,4 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-15";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-17";
 import {
   analyzeHansen,
   cancelForestJob,
@@ -13,8 +13,8 @@ import {
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-15";
-import { forestState } from "./state.js?v=forest-iter2-15";
+} from "./samples.js?v=forest-iter2-17";
+import { forestState } from "./state.js?v=forest-iter2-17";
 
 function $(id) {
   return document.getElementById(id);
@@ -316,6 +316,23 @@ function renderSentinelResults(sample) {
 }
 
 const SENTINEL_VIEW_ORDER = ["rgb", "false_color", "ndvi", "nbr", "ndmi", "scl"];
+const SENTINEL_REVIEW_REASONS = [
+  { value: "CLOUDS", label: "Clouds" },
+  { value: "CLOUD_SHADOW", label: "Cloud shadow" },
+  { value: "HAZE_OR_SMOKE", label: "Haze or smoke" },
+  { value: "SNOW_OR_ICE", label: "Snow or ice" },
+  { value: "SEASON_MISMATCH", label: "Season mismatch" },
+  { value: "TOO_DARK_OR_LOW_CONTRAST", label: "Too dark / low contrast" },
+  { value: "NO_DATA_OR_BLACK_PIXELS", label: "No data / black pixels" },
+  { value: "AOI_NOT_COVERED", label: "AOI not covered" },
+  { value: "GEOREGISTRATION_SHIFT", label: "Georegistration shift" },
+  { value: "WRONG_EVENT_WINDOW", label: "Wrong event window" },
+  { value: "PREVIEW_OR_PROCESSING_ARTIFACT", label: "Preview artifact" },
+  { value: "OTHER", label: "Other" },
+];
+const SENTINEL_REVIEW_REASON_LABELS = new Map(
+  SENTINEL_REVIEW_REASONS.map((reason) => [reason.value, reason.label]),
+);
 
 function sentinelViewRank(view) {
   const index = SENTINEL_VIEW_ORDER.indexOf(view);
@@ -331,6 +348,84 @@ function sentinelViewLabel(view) {
     ndmi: "NDMI",
     scl: "SCL",
   }[view] || view;
+}
+
+function sentinelReviewReasonLabel(reasonCode) {
+  return SENTINEL_REVIEW_REASON_LABELS.get(reasonCode) || reasonCode || "No reason";
+}
+
+function baseSentinelReview(download) {
+  return download.review || {
+    is_excluded: false,
+    reason_code: null,
+    reason_text: null,
+    notes: null,
+  };
+}
+
+function effectiveSentinelReview(download) {
+  return forestState.sentinelReviewDrafts.get(download.download_id) || baseSentinelReview(download);
+}
+
+function sentinelReviewReasonOptions(selectedReason) {
+  return [
+    `<option value="">Choose reason</option>`,
+    ...SENTINEL_REVIEW_REASONS.map(
+      (reason) => `
+        <option value="${escapeHtml(reason.value)}" ${reason.value === selectedReason ? "selected" : ""}>
+          ${escapeHtml(reason.label)}
+        </option>
+      `,
+    ),
+  ].join("");
+}
+
+function renderSentinelReviewPanel(download, review, options = {}) {
+  if (!review.is_excluded) return "";
+
+  const downloadId = download.download_id || "";
+  const reasonCode = review.reason_code || "";
+  const reasonText = review.reason_text || "";
+  const saving = Boolean(options.saving);
+  const hasDraft = forestState.sentinelReviewDrafts.has(downloadId);
+  const isOther = reasonCode === "OTHER";
+  const reasonSummary = reasonCode
+    ? `Reason: ${sentinelReviewReasonLabel(reasonCode)}${isOther && reasonText ? ` / ${reasonText}` : ""}`
+    : "Choose reason before saving.";
+
+  return `
+    <div class="forestSentinelReviewPanel">
+      <label>
+        Reason
+        <select class="forestSentinelReasonSelect" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>
+          ${sentinelReviewReasonOptions(reasonCode)}
+        </select>
+      </label>
+      ${
+        isOther
+          ? `<label>
+              Other reason
+              <input
+                class="forestSentinelOtherReasonInput"
+                type="text"
+                data-download-id="${escapeHtml(downloadId)}"
+                value="${escapeHtml(reasonText)}"
+                maxlength="500"
+                placeholder="What is wrong with this image?"
+                ${saving ? "disabled" : ""}
+              />
+            </label>`
+          : ""
+      }
+      <div class="forestSentinelReviewActions">
+        <span class="meta">${escapeHtml(reasonSummary)}</span>
+        ${hasDraft ? `<button class="forestSentinelReviewCancelBtn" type="button" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>Cancel</button>` : ""}
+        <button class="forestSentinelReviewSaveBtn primary" type="button" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>
+          ${saving ? "Saving" : "Save"}
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 function sentinelDownloadKey(download) {
@@ -377,7 +472,12 @@ function renderSentinelDownloadRow(download) {
   const primary = previews.find((preview) => preview.view === "rgb") || previews[0];
   const downloadKey = sentinelDownloadKey(download);
   const expanded = forestState.sentinelExpandedDownloadKeys.has(downloadKey);
-  const excluded = Boolean(download.review?.is_excluded);
+  const review = effectiveSentinelReview(download);
+  const excluded = Boolean(review.is_excluded);
+  const hasDraft = forestState.sentinelReviewDrafts.has(download.download_id);
+  const saving = forestState.sentinelReviewSavingIds.has(download.download_id);
+  const badgeText = saving ? "Saving" : hasDraft ? "Draft" : excluded ? "Excluded" : "Used";
+  const badgeClass = saving ? "saving" : hasDraft ? "draft" : excluded ? "excluded" : "used";
   if (!primary) {
     return `<div class="forestPreviewEmpty">${escapeHtml(download.datetime?.slice(0, 10) || "no date")}</div>`;
   }
@@ -392,11 +492,13 @@ function renderSentinelDownloadRow(download) {
             type="checkbox"
             data-download-id="${escapeHtml(download.download_id || "")}"
             ${excluded ? "checked" : ""}
+            ${saving ? "disabled" : ""}
           />
           <span>Exclude from use</span>
         </label>
-        <span class="forestPreviewBadge ${excluded ? "excluded" : "used"}">${excluded ? "Excluded" : "Used"}</span>
+        <span class="forestPreviewBadge ${badgeClass}">${escapeHtml(badgeText)}</span>
       </div>
+      ${renderSentinelReviewPanel(download, review, { saving })}
       ${previewButton({
         preview: primary,
         download,
@@ -453,6 +555,267 @@ function renderSentinelDownloads(sample) {
         .join("")}
     </div>
   `;
+}
+
+function bboxToBounds(bbox) {
+  return [
+    [bbox[1], bbox[0]],
+    [bbox[3], bbox[2]],
+  ];
+}
+
+function compareDownloads(sample, period) {
+  return (sample?.sentinel?.downloads || [])
+    .filter((download) => download.period === period && (download.previews || []).length)
+    .sort((left, right) => String(left.datetime || "").localeCompare(String(right.datetime || "")));
+}
+
+function previewForView(download, view) {
+  return (download?.previews || []).find((preview) => preview.view === view) || null;
+}
+
+function availableCompareViews(sample) {
+  const downloads = [...compareDownloads(sample, "PRE"), ...compareDownloads(sample, "POST")];
+  const views = new Set(downloads.flatMap((download) => (download.previews || []).map((preview) => preview.view)));
+  return SENTINEL_VIEW_ORDER.filter((view) => views.has(view));
+}
+
+function bestCompareDownload(sample, period, currentId) {
+  const downloads = compareDownloads(sample, period);
+  if (!downloads.length) return null;
+  const current = downloads.find((download) => download.download_id === currentId);
+  if (current) return current;
+  return downloads.find((download) => !download.review?.is_excluded && previewForView(download, forestState.compareView))
+    || downloads.find((download) => !download.review?.is_excluded)
+    || downloads.find((download) => previewForView(download, forestState.compareView))
+    || downloads[0];
+}
+
+function compareDownloadById(sample, downloadId) {
+  return (sample?.sentinel?.downloads || []).find((download) => download.download_id === downloadId) || null;
+}
+
+function compareOptionLabel(download) {
+  const date = download.datetime ? download.datetime.slice(0, 10) : "unknown date";
+  const cloud = download.cloud_fraction === null || download.cloud_fraction === undefined
+    ? "cloud n/a"
+    : `cloud ${Math.round(Number(download.cloud_fraction) * 100)}%`;
+  const excluded = download.review?.is_excluded ? " / excluded" : "";
+  const scene = download.scene_id ? ` / ${download.scene_id.slice(0, 14)}` : "";
+  return `${date} / ${cloud}${excluded}${scene}`;
+}
+
+function compareDownloadOptions(downloads, selectedId) {
+  if (!downloads.length) return `<option value="">No imagery</option>`;
+  return downloads
+    .map((download) => `
+      <option value="${escapeHtml(download.download_id)}" ${download.download_id === selectedId ? "selected" : ""}>
+        ${escapeHtml(compareOptionLabel(download))}
+      </option>
+    `)
+    .join("");
+}
+
+function compareViewOptions(sample) {
+  const views = availableCompareViews(sample);
+  if (!views.length) return `<option value="">No layers</option>`;
+  return views
+    .map((view) => `
+      <option value="${escapeHtml(view)}" ${forestState.compareView === view ? "selected" : ""}>
+        ${escapeHtml(sentinelViewLabel(view))}
+      </option>
+    `)
+    .join("");
+}
+
+function compareDownloadMeta(download, preview) {
+  if (!download) return "No imagery";
+  const parts = [
+    download.datetime ? download.datetime.slice(0, 10) : "unknown date",
+    preview ? sentinelViewLabel(preview.view) : "layer missing",
+  ];
+  if (download.cloud_fraction !== null && download.cloud_fraction !== undefined) {
+    parts.push(`cloud ${Math.round(Number(download.cloud_fraction) * 100)}%`);
+  }
+  if (download.review?.is_excluded) {
+    const reason = download.review.reason_code
+      ? sentinelReviewReasonLabel(download.review.reason_code)
+      : "no reason";
+    parts.push(`excluded: ${reason}`);
+  }
+  return parts.join(" / ");
+}
+
+function canCompareSentinel(sample) {
+  return compareDownloads(sample, "PRE").length > 0 && compareDownloads(sample, "POST").length > 0;
+}
+
+function compareHansenOverlay(sample) {
+  const masks = sample?.hansen?.masks || [];
+  return (
+    masks.find((mask) => mask.mask_type === "aoi_dominant_year")
+    || masks.find((mask) => mask.mask_type === "dominant_year")
+    || masks.find((mask) => mask.mask_type === "aoi_all_loss")
+    || masks.find((mask) => mask.mask_type === "all_loss")
+    || null
+  );
+}
+
+function ensureCompareSelections(sample) {
+  const views = availableCompareViews(sample);
+  if (!views.includes(forestState.compareView)) {
+    forestState.compareView = views.includes("rgb") ? "rgb" : views[0] || "rgb";
+  }
+
+  const pre = bestCompareDownload(sample, "PRE", forestState.comparePreDownloadId);
+  const post = bestCompareDownload(sample, "POST", forestState.comparePostDownloadId);
+  forestState.comparePreDownloadId = pre?.download_id || null;
+  forestState.comparePostDownloadId = post?.download_id || null;
+  return { pre, post };
+}
+
+function ensureCompareMap(kind) {
+  const mapId = kind === "pre" ? "forestComparePreMap" : "forestComparePostMap";
+  if (forestState.compareMaps[kind]) return forestState.compareMaps[kind];
+
+  const map = L.map(mapId, {
+    zoomControl: true,
+    attributionControl: false,
+    center: [0, 0],
+    zoom: 2,
+  });
+  map.createPane("compareImagePane");
+  map.getPane("compareImagePane").style.zIndex = 300;
+  map.createPane("compareHansenPane");
+  map.getPane("compareHansenPane").style.zIndex = 420;
+  map.on("moveend zoomend", () => syncCompareMaps(kind));
+  forestState.compareMaps[kind] = map;
+  return map;
+}
+
+function syncCompareMaps(sourceKind) {
+  if (forestState.compareSyncing) return;
+  const source = forestState.compareMaps[sourceKind];
+  const target = forestState.compareMaps[sourceKind === "pre" ? "post" : "pre"];
+  if (!source || !target) return;
+  forestState.compareSyncing = true;
+  target.setView(source.getCenter(), source.getZoom(), { animate: false });
+  forestState.compareSyncing = false;
+}
+
+function removeCompareLayer(name) {
+  const kind = name.startsWith("pre") ? "pre" : "post";
+  const map = forestState.compareMaps[kind];
+  const layer = forestState.compareLayers[name];
+  if (map && layer) {
+    map.removeLayer(layer);
+  }
+  forestState.compareLayers[name] = null;
+}
+
+function renderCompareMap(kind, download, preview, hansenOverlay) {
+  const map = ensureCompareMap(kind);
+  removeCompareLayer(`${kind}Image`);
+  removeCompareLayer(`${kind}Hansen`);
+
+  if (preview?.url && preview?.bbox) {
+    forestState.compareLayers[`${kind}Image`] = L.imageOverlay(
+      preview.url,
+      bboxToBounds(preview.bbox),
+      { pane: "compareImagePane", opacity: 1, interactive: false },
+    ).addTo(map);
+  }
+
+  if (forestState.compareShowHansen && hansenOverlay?.png_url && hansenOverlay?.bbox) {
+    forestState.compareLayers[`${kind}Hansen`] = L.imageOverlay(
+      hansenOverlay.png_url,
+      bboxToBounds(hansenOverlay.bbox),
+      { pane: "compareHansenPane", opacity: forestState.compareHansenOpacity, interactive: false },
+    ).addTo(map);
+  }
+
+  if (preview?.bbox) {
+    map.fitBounds(bboxToBounds(preview.bbox), { padding: [20, 20], animate: false });
+  } else if (hansenOverlay?.bbox) {
+    map.fitBounds(bboxToBounds(hansenOverlay.bbox), { padding: [20, 20], animate: false });
+  }
+  window.setTimeout(() => map.invalidateSize(), 50);
+  window.setTimeout(() => map.invalidateSize(), 240);
+}
+
+function renderCompareView() {
+  const compare = $("forestCompareView");
+  const sample = forestState.selectedDetail;
+  if (!compare || !sample || !forestState.compareOpen) return;
+
+  const { pre, post } = ensureCompareSelections(sample);
+  const prePreview = previewForView(pre, forestState.compareView);
+  const postPreview = previewForView(post, forestState.compareView);
+  const hansenOverlay = compareHansenOverlay(sample);
+
+  $("forestCompareLayerSelect").innerHTML = compareViewOptions(sample);
+  $("forestComparePreSelect").innerHTML = compareDownloadOptions(compareDownloads(sample, "PRE"), pre?.download_id);
+  $("forestComparePostSelect").innerHTML = compareDownloadOptions(compareDownloads(sample, "POST"), post?.download_id);
+  $("forestCompareHansenToggle").checked = forestState.compareShowHansen;
+  $("forestCompareHansenOpacityInput").value = String(Math.round(forestState.compareHansenOpacity * 100));
+  $("forestComparePreMeta").textContent = compareDownloadMeta(pre, prePreview);
+  $("forestComparePostMeta").textContent = compareDownloadMeta(post, postPreview);
+
+  const selectedName = sampleDisplayName(sample);
+  const missingLayer = !prePreview || !postPreview;
+  $("forestCompareStatus").textContent = missingLayer
+    ? `${selectedName}: selected layer is missing for one side`
+    : `${selectedName}: ${sentinelViewLabel(forestState.compareView)} PRE/POST`;
+
+  bindCompareControls();
+  renderCompareMap("pre", pre, prePreview, hansenOverlay);
+  renderCompareMap("post", post, postPreview, hansenOverlay);
+}
+
+function openCompareView() {
+  const sample = forestState.selectedDetail;
+  if (!sample || !canCompareSentinel(sample)) {
+    setForestStatus("Need at least one PRE and one POST Sentinel image");
+    return;
+  }
+  forestState.compareOpen = true;
+  ensureCompareSelections(sample);
+  $("forestCompareView").hidden = false;
+  renderCompareView();
+  setForestStatus("PRE/POST compare opened");
+}
+
+function closeCompareView(options = {}) {
+  forestState.compareOpen = false;
+  const compare = $("forestCompareView");
+  if (compare) compare.hidden = true;
+  if (!options.silent) setForestStatus("PRE/POST compare closed");
+}
+
+function bindCompareControls() {
+  $("forestCompareCloseBtn").onclick = () => closeCompareView();
+  $("forestCompareLayerSelect").onchange = (event) => {
+    forestState.compareView = event.target.value || "rgb";
+    renderCompareView();
+  };
+  $("forestComparePreSelect").onchange = (event) => {
+    forestState.comparePreDownloadId = event.target.value || null;
+    renderCompareView();
+  };
+  $("forestComparePostSelect").onchange = (event) => {
+    forestState.comparePostDownloadId = event.target.value || null;
+    renderCompareView();
+  };
+  $("forestCompareHansenToggle").onchange = (event) => {
+    forestState.compareShowHansen = event.target.checked;
+    renderCompareView();
+  };
+  $("forestCompareHansenOpacityInput").oninput = (event) => {
+    forestState.compareHansenOpacity = Number(event.target.value) / 100;
+    ["preHansen", "postHansen"].forEach((name) => {
+      forestState.compareLayers[name]?.setOpacity(forestState.compareHansenOpacity);
+    });
+  };
 }
 
 function allDownloadedPreviews(sample) {
@@ -676,7 +1039,10 @@ function renderDetail() {
     <article class="forestActionPanel">
       <div class="forestPanelHeader">
         <h3>Sentinel-2</h3>
-        <button id="forestSearchSentinelBtn" class="primary" type="button">Search Sentinel-2</button>
+        <div class="forestPanelActions">
+          <button id="forestCompareSentinelBtn" type="button" ${canCompareSentinel(sample) ? "" : "disabled"}>Compare PRE/POST</button>
+          <button id="forestSearchSentinelBtn" class="primary" type="button">Search Sentinel-2</button>
+        </div>
       </div>
       <div class="forestSentinelControls">
         <label>
@@ -740,6 +1106,7 @@ function renderDetail() {
     cancelHansenButton.addEventListener("click", () => run(cancelHansenAnalysis));
   }
   $("forestSearchSentinelBtn").addEventListener("click", () => run(runSentinelSearch));
+  $("forestCompareSentinelBtn").addEventListener("click", () => openCompareView());
   const downloadButton = $("forestDownloadSentinelBtn");
   if (downloadButton) {
     downloadButton.addEventListener("click", () => run(downloadCheckedSentinelScenes));
@@ -796,6 +1163,26 @@ function bindSentinelDownloadControls() {
     checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", (event) => run(() => toggleSentinelReview(event)));
   });
+  document.querySelectorAll(".forestSentinelReasonSelect").forEach((select) => {
+    select.addEventListener("click", (event) => event.stopPropagation());
+    select.addEventListener("change", (event) => updateSentinelReviewReason(event));
+  });
+  document.querySelectorAll(".forestSentinelOtherReasonInput").forEach((input) => {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("input", (event) => updateSentinelReviewOtherText(event));
+  });
+  document.querySelectorAll(".forestSentinelReviewSaveBtn").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      run(() => saveSentinelReviewDraft(button.dataset.downloadId));
+    });
+  });
+  document.querySelectorAll(".forestSentinelReviewCancelBtn").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      cancelSentinelReviewDraft(button.dataset.downloadId);
+    });
+  });
 }
 
 function renderSentinelDownloadsPanel() {
@@ -818,6 +1205,7 @@ function renderMap(fit = false) {
 }
 
 function clearSelectedSample() {
+  closeCompareView({ silent: true });
   forestState.selectedSampleId = null;
   forestState.selectedDetail = null;
   forestState.activeSentinelPreview = null;
@@ -865,7 +1253,10 @@ async function refreshSamples(options = {}) {
 async function selectSample(sampleId, options = {}) {
   logUiDebug("selectSample start", { sample_id: sampleId });
   if (forestState.selectedSampleId !== sampleId) {
+    closeCompareView({ silent: true });
     forestState.sentinelImageIdQuery = "";
+    forestState.comparePreDownloadId = null;
+    forestState.comparePostDownloadId = null;
   }
   forestState.selectedSampleId = sampleId;
   forestState.selectedDetail = await getForestSample(sampleId);
@@ -986,36 +1377,159 @@ async function downloadCheckedSentinelScenes() {
   setForestStatus(`Sentinel imagery downloaded: ${scenes.length}`);
 }
 
+function findSentinelDownload(downloadId) {
+  return (forestState.selectedDetail?.sentinel?.downloads || []).find(
+    (download) => download.download_id === downloadId,
+  ) || null;
+}
+
+function sentinelReviewDraftFromDownload(download, patch = {}) {
+  const current = forestState.sentinelReviewDrafts.get(download.download_id) || baseSentinelReview(download);
+  return {
+    is_excluded: true,
+    reason_code: current.reason_code || "",
+    reason_text: current.reason_text || "",
+    notes: current.notes || null,
+    ...patch,
+  };
+}
+
+function setSentinelReviewDraft(downloadId, patch = {}) {
+  const download = findSentinelDownload(downloadId);
+  if (!download) return null;
+  const draft = sentinelReviewDraftFromDownload(download, patch);
+  forestState.sentinelReviewDrafts.set(downloadId, draft);
+  return draft;
+}
+
+function updateSentinelReviewReason(event) {
+  const select = event.target;
+  const reasonCode = select.value;
+  const draft = setSentinelReviewDraft(select.dataset.downloadId, {
+    reason_code: reasonCode,
+    reason_text: reasonCode === "OTHER" ? undefined : "",
+  });
+  renderSentinelDownloadsPanel();
+  setForestStatus(draft?.reason_code ? "Sentinel review reason selected" : "choose Sentinel review reason");
+}
+
+function updateSentinelReviewOtherText(event) {
+  setSentinelReviewDraft(event.target.dataset.downloadId, {
+    reason_code: "OTHER",
+    reason_text: event.target.value,
+  });
+}
+
+function cancelSentinelReviewDraft(downloadId) {
+  if (!downloadId) return;
+  forestState.sentinelReviewDrafts.delete(downloadId);
+  renderSentinelDownloadsPanel();
+  setForestStatus("Sentinel review draft cancelled");
+}
+
+async function refreshSelectedSampleAfterSentinelReview(previousSearch) {
+  forestState.selectedDetail = await getForestSample(forestState.selectedSampleId);
+  if (previousSearch) {
+    forestState.selectedDetail.sentinelSearch = previousSearch;
+  }
+  ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
+  renderDetail();
+  renderMap();
+}
+
+async function restoreSentinelReview(downloadId) {
+  const previousSearch = forestState.selectedDetail?.sentinelSearch || null;
+  forestState.sentinelReviewDrafts.delete(downloadId);
+  forestState.sentinelReviewSavingIds.add(downloadId);
+  renderSentinelDownloadsPanel();
+  setForestStatus("restoring Sentinel scene");
+
+  let refreshed = false;
+  try {
+    await saveSentinelReview(downloadId, {
+      is_excluded: false,
+      reason_code: null,
+      reason_text: null,
+      notes: null,
+    });
+    forestState.sentinelReviewSavingIds.delete(downloadId);
+    await refreshSelectedSampleAfterSentinelReview(previousSearch);
+    refreshed = true;
+    setForestStatus("Sentinel scene restored");
+  } finally {
+    if (!refreshed) {
+      forestState.sentinelReviewSavingIds.delete(downloadId);
+      renderSentinelDownloadsPanel();
+    }
+  }
+}
+
 async function toggleSentinelReview(event) {
   const checkbox = event.target;
   const downloadId = checkbox.dataset.downloadId;
   if (!downloadId || !forestState.selectedSampleId) return;
 
-  const isExcluded = checkbox.checked;
-  const previousSearch = forestState.selectedDetail?.sentinelSearch || null;
-  checkbox.disabled = true;
-  setForestStatus(isExcluded ? "excluding Sentinel scene" : "restoring Sentinel scene");
+  const download = findSentinelDownload(downloadId);
+  if (!download) return;
 
+  if (checkbox.checked) {
+    setSentinelReviewDraft(downloadId, { is_excluded: true });
+    renderSentinelDownloadsPanel();
+    setForestStatus("choose Sentinel exclusion reason");
+    return;
+  }
+
+  if (download.review?.is_excluded) {
+    await restoreSentinelReview(downloadId);
+    return;
+  }
+
+  forestState.sentinelReviewDrafts.delete(downloadId);
+  renderSentinelDownloadsPanel();
+  setForestStatus("Sentinel exclusion cancelled");
+}
+
+async function saveSentinelReviewDraft(downloadId) {
+  if (!downloadId || !forestState.selectedSampleId) return;
+
+  const download = findSentinelDownload(downloadId);
+  if (!download) return;
+  const review = effectiveSentinelReview(download);
+  const reasonCode = String(review.reason_code || "").trim();
+  const reasonText = reasonCode === "OTHER" ? String(review.reason_text || "").trim() : null;
+
+  if (!reasonCode) {
+    setForestStatus("choose Sentinel exclusion reason");
+    return;
+  }
+  if (reasonCode === "OTHER" && !reasonText) {
+    setForestStatus("fill Other reason before saving");
+    return;
+  }
+
+  const previousSearch = forestState.selectedDetail?.sentinelSearch || null;
+  forestState.sentinelReviewSavingIds.add(downloadId);
+  renderSentinelDownloadsPanel();
+  setForestStatus("saving Sentinel review");
+
+  let refreshed = false;
   try {
     await saveSentinelReview(downloadId, {
-      is_excluded: isExcluded,
-      reason_code: null,
-      reason_text: null,
+      is_excluded: true,
+      reason_code: reasonCode,
+      reason_text: reasonText,
       notes: null,
     });
-    forestState.selectedDetail = await getForestSample(forestState.selectedSampleId);
-    if (previousSearch) {
-      forestState.selectedDetail.sentinelSearch = previousSearch;
-    }
-    ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
-    renderDetail();
-    renderMap();
-    setForestStatus(isExcluded ? "Sentinel scene excluded" : "Sentinel scene restored");
-  } catch (error) {
-    checkbox.checked = !isExcluded;
-    throw error;
+    forestState.sentinelReviewDrafts.delete(downloadId);
+    forestState.sentinelReviewSavingIds.delete(downloadId);
+    await refreshSelectedSampleAfterSentinelReview(previousSearch);
+    refreshed = true;
+    setForestStatus("Sentinel scene excluded");
   } finally {
-    checkbox.disabled = false;
+    if (!refreshed) {
+      forestState.sentinelReviewSavingIds.delete(downloadId);
+      renderSentinelDownloadsPanel();
+    }
   }
 }
 

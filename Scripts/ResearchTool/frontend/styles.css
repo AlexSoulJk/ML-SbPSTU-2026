@@ -869,6 +869,13 @@ textarea {
   margin-bottom: 10px;
 }
 
+.forestPanelActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .forestPanelHeader h3 {
   margin: 0;
   font-size: 13px;
@@ -1124,6 +1131,52 @@ textarea {
   background: #f1f8f1;
 }
 
+.forestPreviewBadge.draft {
+  border-color: rgba(191, 148, 42, 0.42);
+  color: #7a5a18;
+  background: #fff8df;
+}
+
+.forestPreviewBadge.saving {
+  border-color: rgba(37, 99, 90, 0.28);
+  color: var(--brand);
+  background: #edf6f3;
+}
+
+.forestSentinelReviewPanel {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(212, 93, 63, 0.22);
+  border-radius: 6px;
+  background: #fff8f5;
+}
+
+.forestSentinelReviewPanel label {
+  min-width: 0;
+}
+
+.forestSentinelReviewActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.forestSentinelReviewActions .meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.forestSentinelReviewActions button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 .forestPreviewLayers {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
@@ -1223,6 +1276,124 @@ textarea {
   color: var(--muted);
   background: #fff;
   font-size: 12px;
+}
+
+.forestCompareView {
+  position: absolute;
+  inset: 0;
+  z-index: 1250;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: #f7f8f3;
+}
+
+.forestCompareView[hidden] {
+  display: none !important;
+}
+
+.forestCompareHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.forestCompareTitleBlock {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.forestCompareHeader h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.forestCompareActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.forestCompareToolbar {
+  display: grid;
+  grid-template-columns:
+    minmax(120px, 160px)
+    minmax(180px, 1fr)
+    minmax(180px, 1fr)
+    minmax(150px, auto)
+    minmax(140px, 180px);
+  gap: 10px;
+  align-items: end;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcf8;
+}
+
+.forestCompareToggle {
+  min-height: 34px;
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.forestCompareGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 14px 14px;
+}
+
+.forestComparePane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestComparePaneHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #f4f7f2;
+}
+
+.forestComparePaneHeader strong {
+  flex: 0 0 auto;
+  color: #425251;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.forestComparePaneHeader .meta {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.forestCompareMap {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: #dce5de;
 }
 
 .forestValidation {
@@ -1533,5 +1704,17 @@ textarea {
 
   .forestSentinelControls {
     grid-template-columns: 1fr;
+  }
+
+  .forestCompareToolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .forestCompareGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .forestCompareView {
+    position: fixed;
   }
 }

@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=forest-iter2-15" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=forest-iter2-17" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -280,6 +280,55 @@
             </section>
           </div>
         </aside>
+        <section id="forestCompareView" class="forestCompareView forestOnly" hidden>
+          <header class="forestCompareHeader">
+            <div class="forestCompareTitleBlock">
+              <h2>PRE/POST Compare</h2>
+              <div id="forestCompareStatus" class="meta">Select PRE and POST imagery.</div>
+            </div>
+            <div class="forestCompareActions">
+              <button id="forestCompareCloseBtn" type="button">Close</button>
+            </div>
+          </header>
+          <div class="forestCompareToolbar">
+            <label>
+              Layer
+              <select id="forestCompareLayerSelect"></select>
+            </label>
+            <label>
+              PRE
+              <select id="forestComparePreSelect"></select>
+            </label>
+            <label>
+              POST
+              <select id="forestComparePostSelect"></select>
+            </label>
+            <label class="toggle forestCompareToggle">
+              <input id="forestCompareHansenToggle" type="checkbox" checked />
+              <span>Hansen overlay</span>
+            </label>
+            <label>
+              Hansen opacity
+              <input id="forestCompareHansenOpacityInput" type="range" min="0" max="100" value="68" />
+            </label>
+          </div>
+          <div class="forestCompareGrid">
+            <article class="forestComparePane">
+              <div class="forestComparePaneHeader">
+                <strong>PRE</strong>
+                <span id="forestComparePreMeta" class="meta"></span>
+              </div>
+              <div id="forestComparePreMap" class="forestCompareMap"></div>
+            </article>
+            <article class="forestComparePane">
+              <div class="forestComparePaneHeader">
+                <strong>POST</strong>
+                <span id="forestComparePostMeta" class="meta"></span>
+              </div>
+              <div id="forestComparePostMap" class="forestCompareMap"></div>
+            </article>
+          </div>
+        </section>
         <section class="drawer">
           <div id="forestDrawer" class="forestOnly">
             <div class="drawerHeader">
@@ -321,7 +370,7 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/frontend/app.js?v=forest-iter2-15"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-iter2-15"></script>
+    <script src="/frontend/app.js?v=forest-iter2-17"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-iter2-17"></script>
   </body>
 </html>

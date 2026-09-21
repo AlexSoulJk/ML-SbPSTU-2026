@@ -891,7 +891,9 @@ def save_sentinel_review(
     reason_text = clean_optional_text(request.reason_text)
     notes = clean_optional_text(request.notes)
 
-    if request.is_excluded and reason_code:
+    if request.is_excluded:
+        if not reason_code:
+            raise HTTPException(status_code=400, detail="reason_code is required when excluding a Sentinel scene.")
         if reason_code not in SENTINEL_REVIEW_REASON_CODES:
             allowed = ", ".join(sorted(SENTINEL_REVIEW_REASON_CODES))
             raise HTTPException(status_code=400, detail=f"reason_code must be one of: {allowed}")
