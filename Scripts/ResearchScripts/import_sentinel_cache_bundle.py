@@ -144,6 +144,12 @@ def sync_db_records(manifest: dict[str, Any]) -> dict[str, int]:
     if DRY_RUN:
         return {"would_sync": 1}
 
+    available_paths = {
+        row["relative_path"]
+        for row in manifest.get("files", [])
+        if (PROJECT_ROOT / str(row.get("relative_path") or "")).exists()
+    }
+
     with SessionLocal() as db:
         for download in manifest.get("downloads", []):
             download_id = download.get("download_id")
@@ -151,7 +157,11 @@ def sync_db_records(manifest: dict[str, Any]) -> dict[str, int]:
             if record is None:
                 stats["missing_download_record"] += 1
                 continue
-            record.local_path = download.get("raster_path") or record.local_path
+            raster_path = download.get("raster_path")
+            if raster_path and raster_path in available_paths:
+                record.local_path = raster_path
+            elif raster_path:
+                stats["missing_download_file"] += 1
             stats["download_synced"] += 1
 
         preview_paths: dict[str, dict[str, str]] = {}
@@ -171,10 +181,14 @@ def sync_db_records(manifest: dict[str, Any]) -> dict[str, int]:
             if record is None:
                 stats["missing_preview_record"] += 1
                 continue
-            if "png_path" in paths:
+            if "png_path" in paths and paths["png_path"] in available_paths:
                 record.png_path = paths["png_path"]
-            if "metadata_path" in paths:
+            elif "png_path" in paths:
+                stats["missing_preview_png_file"] += 1
+            if "metadata_path" in paths and paths["metadata_path"] in available_paths:
                 record.metadata_path = paths["metadata_path"]
+            elif "metadata_path" in paths:
+                stats["missing_preview_metadata_file"] += 1
             stats["preview_synced"] += 1
 
         db.commit()
@@ -218,12 +232,17 @@ def main() -> None:
     report_path = write_report(rows)
 
     action_counts = Counter(row["action"] for row in rows)
+    kind_counts = Counter(row["kind"] for row in rows)
+    missing_by_kind = Counter(row["kind"] for row in rows if row["action"] == "missing_bundle_file")
     copied_bytes = sum(int(row.get("bytes") or 0) for row in rows if row["action"] in {"copied", "would_copy"})
     print(f"DRY_RUN: {DRY_RUN}")
     print(f"Bundle: {bundle_path}")
     print(f"Files: {len(rows)}")
     print(f"Copy bytes: {copied_bytes / 1024 / 1024:.1f} MiB")
+    print(f"File kinds: {dict(sorted(kind_counts.items()))}")
     print(f"Actions: {dict(sorted(action_counts.items()))}")
+    if missing_by_kind:
+        print(f"Missing by kind: {dict(sorted(missing_by_kind.items()))}")
     print(f"DB sync: {db_stats}")
     print(f"Report: {report_path}")
     if DRY_RUN:
