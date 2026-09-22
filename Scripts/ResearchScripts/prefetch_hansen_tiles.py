@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -136,15 +137,21 @@ def main() -> None:
         init_forest_database()
 
     with SessionLocal() as db:
+        tile_counts = unique_sample_tiles(db)
         rows = planned_tile_rows(db)
         missing_rows = [row for row in rows if row["action"] == "download"]
         if LIMIT_TILES is not None:
             missing_rows = missing_rows[:LIMIT_TILES]
 
+        action_counts = Counter(str(row["action"]) for row in rows)
         print(f"Hansen version: {HANSEN_VERSION}")
         print(f"Layers: {', '.join(LAYERS)}")
+        print(f"Samples in DB: {sum(tile_counts.values())}")
+        print(f"Unique sample tiles: {len(tile_counts)}")
         print(f"Unique tile/layer rows: {len(rows)}")
         print(f"Missing tile/layer rows to download: {len(missing_rows)}")
+        print(f"LIMIT_TILES: {LIMIT_TILES}")
+        print(f"Actions: {dict(sorted(action_counts.items()))}")
         print(f"DRY_RUN: {DRY_RUN}")
 
         if DRY_RUN:

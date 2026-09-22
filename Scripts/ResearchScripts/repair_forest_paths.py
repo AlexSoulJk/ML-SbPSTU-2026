@@ -53,6 +53,29 @@ def normalize_relative(path: Path | PureWindowsPath | PurePosixPath) -> str:
     return PurePosixPath(*path.parts).as_posix()
 
 
+def relative_by_known_anchor(value: str) -> str | None:
+    candidate_paths = (
+        PureWindowsPath(value),
+        PurePosixPath(value),
+    )
+    anchors = (
+        ("Scripts", "ResearchTool"),
+        (PROJECT_ROOT.name,),
+    )
+
+    for candidate in candidate_paths:
+        parts = candidate.parts
+        for anchor in anchors:
+            anchor_len = len(anchor)
+            for index in range(0, len(parts) - anchor_len + 1):
+                if tuple(parts[index : index + anchor_len]) != anchor:
+                    continue
+                relative_parts = parts[index + anchor_len :] if anchor == (PROJECT_ROOT.name,) else parts[index:]
+                if relative_parts:
+                    return normalize_relative(PurePosixPath(*relative_parts))
+    return None
+
+
 def is_absolute_path(value: str) -> bool:
     return (
         Path(value).is_absolute()
@@ -78,7 +101,9 @@ def relative_to_project(value: str) -> str | None:
     try:
         return normalize_relative(value_win.relative_to(project_win))
     except ValueError:
-        return None
+        pass
+
+    return relative_by_known_anchor(value)
 
 
 def quote_identifier(identifier: str) -> str:
