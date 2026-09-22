@@ -25,6 +25,34 @@ from .storage_paths import forest_cache_url, resolve_storage_path, to_storage_pa
 ProgressCallback = Callable[[str, str], None]
 CancelCallback = Callable[[], bool]
 TOO_OLD_EVENT_YEAR_CUTOFF = 2016
+HANSEN_LOSS_YEAR_ALPHA = 205
+HANSEN_LOSS_YEAR_COLORS = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+    "#393b79",
+    "#637939",
+    "#8c6d31",
+    "#843c39",
+    "#7b4173",
+    "#3182bd",
+    "#31a354",
+    "#756bb1",
+    "#e6550d",
+    "#969696",
+    "#6baed6",
+    "#74c476",
+    "#9e9ac8",
+    "#fd8d3c",
+    "#de2d26",
+]
 
 def existing_hansen_analysis(db: Session, sample_id: str) -> HansenAnalysis | None:
     return db.scalar(
@@ -63,15 +91,44 @@ def lonlat_bbox(transform: Any, width: int, height: int, crs: Any) -> list[float
     return [left, bottom, right, top]
 
 
+def hex_to_rgb(color: str) -> tuple[int, int, int]:
+    value = color.lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def loss_year_color_hex(code: int) -> str:
+    if code <= 0:
+        return "#000000"
+    return HANSEN_LOSS_YEAR_COLORS[(code - 1) % len(HANSEN_LOSS_YEAR_COLORS)]
+
+
+def loss_year_color_rgb(code: int) -> tuple[int, int, int]:
+    return hex_to_rgb(loss_year_color_hex(code))
+
+
+def loss_year_legend(loss: np.ndarray) -> list[dict[str, Any]]:
+    codes = np.unique(np.asarray(loss, dtype=np.uint8))
+    return [
+        {
+            "code": int(code),
+            "year": 2000 + int(code),
+            "color": loss_year_color_hex(int(code)),
+        }
+        for code in codes.tolist()
+        if int(code) > 0
+    ]
+
+
 def rgba_loss_year(loss: np.ndarray) -> np.ndarray:
     data = np.asarray(loss, dtype=np.uint8)
-    alpha = np.where(data > 0, 190, 0).astype(np.uint8)
-    norm = np.clip((data.astype(np.float32) - 1.0) / 25.0, 0.0, 1.0)
     rgba = np.zeros((*data.shape, 4), dtype=np.uint8)
-    rgba[..., 0] = np.where(data > 0, 244, 0)
-    rgba[..., 1] = np.where(data > 0, (190 - norm * 135).astype(np.uint8), 0)
-    rgba[..., 2] = np.where(data > 0, 58, 0)
-    rgba[..., 3] = alpha
+    for code in np.unique(data[data > 0]).tolist():
+        color = loss_year_color_rgb(int(code))
+        mask = data == code
+        rgba[mask, 0] = color[0]
+        rgba[mask, 1] = color[1]
+        rgba[mask, 2] = color[2]
+        rgba[mask, 3] = HANSEN_LOSS_YEAR_ALPHA
     return rgba
 
 
@@ -118,6 +175,17 @@ def write_png(path: Path, rgba: np.ndarray) -> None:
 
 def cache_url(path: Path) -> str | None:
     return forest_cache_url(path)
+
+
+def mask_legend(mask: HansenMask) -> list[dict[str, Any]]:
+    if mask.mask_type not in {"all_loss", "aoi_all_loss"}:
+        return []
+    path = resolve_storage_path(mask.local_path)
+    if not path.exists():
+        return []
+    with rasterio.open(path) as dataset:
+        data = dataset.read(1)
+    return loss_year_legend(data)
 
 
 def status_for_loss(total_loss_area_ha: float, dominant_area_ha: float, share: float) -> str:
@@ -203,6 +271,7 @@ def latest_hansen_payload(db: Session, sample_id: str) -> dict[str, Any] | None:
                 "local_path": mask.local_path,
                 "png_url": cache_url(resolve_storage_path(mask.local_path).with_suffix(".png")),
                 "bbox": json.loads(mask.bbox_json),
+                "legend": mask_legend(mask),
             }
             for mask in masks
         ],

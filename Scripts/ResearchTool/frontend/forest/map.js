@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=forest-iter2-17";
+import { forestState } from "./state.js?v=forest-iter2-20";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 
@@ -373,7 +373,12 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
       forestState.layers.hansen = L.imageOverlay(
         overlay.png_url,
         bboxToBounds(overlay.bbox),
-        { pane: "forestRasterPane", opacity: forestState.hansenOpacity, interactive: false },
+        {
+          pane: "forestRasterPane",
+          opacity: forestState.hansenOpacity,
+          interactive: false,
+          className: `forestHansenOverlay ${forestState.hansenPixelated ? "pixelated" : ""}`,
+        },
       ).addTo(map);
     }
 

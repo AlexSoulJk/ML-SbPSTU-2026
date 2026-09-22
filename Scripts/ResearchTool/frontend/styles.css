@@ -474,6 +474,46 @@ textarea {
   text-transform: uppercase;
 }
 
+.forestHansenLegend {
+  display: grid;
+  gap: 7px;
+}
+
+.forestHansenLegendTitle {
+  color: #425251;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.forestHansenLegendItems {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.forestHansenLegendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.forestHansenLegendItem i {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(31, 42, 43, 0.18);
+  border-radius: 3px;
+}
+
 .drawer {
   overflow: auto;
   border-top: 1px solid var(--line);
@@ -1323,12 +1363,7 @@ textarea {
 
 .forestCompareToolbar {
   display: grid;
-  grid-template-columns:
-    minmax(120px, 160px)
-    minmax(180px, 1fr)
-    minmax(180px, 1fr)
-    minmax(150px, auto)
-    minmax(140px, 180px);
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
   gap: 10px;
   align-items: end;
   padding: 10px 14px;
@@ -1345,6 +1380,42 @@ textarea {
   background: #fff;
 }
 
+.forestCompareLayerPanel {
+  position: absolute;
+  top: 62px;
+  right: 12px;
+  z-index: 1000;
+  width: 34px;
+  height: 34px;
+  pointer-events: none;
+}
+
+.forestCompareLayerPanelOpen {
+  box-shadow: var(--shadow);
+}
+
+.forestCompareLayerPanel:not(.collapsed) .forestCompareLayerPanelOpen,
+.forestCompareLayerPanel.collapsed .forestCompareLayerPanelBody {
+  display: none;
+}
+
+.forestCompareLayerPanelBody {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  gap: 10px;
+  width: min(270px, calc(100vw - 48px));
+  max-height: min(520px, calc(100vh - 220px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(251, 252, 248, 0.98);
+  box-shadow: var(--shadow);
+  overflow: auto;
+  pointer-events: auto;
+}
+
 .forestCompareGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1355,6 +1426,7 @@ textarea {
 }
 
 .forestComparePane {
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
@@ -1578,6 +1650,11 @@ textarea {
   z-index: 1;
 }
 
+.forestHansenOverlay.pixelated {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 .leaflet-control-container .leaflet-top,
 .leaflet-control-container .leaflet-bottom {
   position: absolute;
@@ -1708,6 +1785,10 @@ textarea {
 
   .forestCompareToolbar {
     grid-template-columns: 1fr;
+  }
+
+  .forestCompareLayerPanelBody {
+    max-height: calc(100vh - 180px);
   }
 
   .forestCompareGrid {

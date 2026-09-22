@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=forest-iter2-17" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=forest-iter2-20" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -245,6 +245,11 @@
                 Hansen opacity
                 <input id="forestHansenOpacityInput" type="range" min="0" max="100" value="72" />
               </label>
+              <label class="toggle">
+                <input id="forestHansenPixelatedToggle" type="checkbox" checked />
+                <span>Pixelated Hansen</span>
+              </label>
+              <div id="forestHansenLegend" class="forestHansenLegend"></div>
             </section>
 
             <section class="mapLayerGroup pipelineOnly">
@@ -292,24 +297,12 @@
           </header>
           <div class="forestCompareToolbar">
             <label>
-              Layer
-              <select id="forestCompareLayerSelect"></select>
-            </label>
-            <label>
               PRE
               <select id="forestComparePreSelect"></select>
             </label>
             <label>
               POST
               <select id="forestComparePostSelect"></select>
-            </label>
-            <label class="toggle forestCompareToggle">
-              <input id="forestCompareHansenToggle" type="checkbox" checked />
-              <span>Hansen overlay</span>
-            </label>
-            <label>
-              Hansen opacity
-              <input id="forestCompareHansenOpacityInput" type="range" min="0" max="100" value="68" />
             </label>
           </div>
           <div class="forestCompareGrid">
@@ -325,6 +318,54 @@
                 <strong>POST</strong>
                 <span id="forestComparePostMeta" class="meta"></span>
               </div>
+              <aside id="forestCompareLayerPanel" class="forestCompareLayerPanel">
+                <button id="forestCompareLayerPanelOpen" class="mapLayerIconButton forestCompareLayerPanelOpen" type="button" aria-expanded="false" title="Show compare layers" aria-label="Show compare layers">
+                  <span></span>
+                  <span></span>
+                </button>
+                <div class="forestCompareLayerPanelBody">
+                  <header class="mapLayerPanelHeader">
+                    <h2>Layers</h2>
+                    <button id="forestCompareLayerPanelClose" class="mapLayerIconButton" type="button" aria-expanded="true" title="Hide compare layers" aria-label="Hide compare layers">
+                      <span></span>
+                      <span></span>
+                    </button>
+                  </header>
+                  <section class="mapLayerGroup">
+                    <h2>Sentinel</h2>
+                    <label>
+                      Layer
+                      <select id="forestCompareLayerSelect"></select>
+                    </label>
+                  </section>
+                  <section class="mapLayerGroup">
+                    <h2>Hansen</h2>
+                    <label>
+                      Mask
+                      <select id="forestCompareHansenLayerSelect">
+                        <option value="dominant_year">Dominant year</option>
+                        <option value="all_loss">All loss years</option>
+                        <option value="treecover2000">Treecover 2000</option>
+                      </select>
+                    </label>
+                    <div class="overlayToggles">
+                      <label class="toggle">
+                        <input id="forestCompareHansenToggle" type="checkbox" checked />
+                        <span>overlay</span>
+                      </label>
+                      <label class="toggle">
+                        <input id="forestComparePixelatedToggle" type="checkbox" checked />
+                        <span>pixelated</span>
+                      </label>
+                    </div>
+                    <label>
+                      Opacity
+                      <input id="forestCompareHansenOpacityInput" type="range" min="0" max="100" value="68" />
+                    </label>
+                    <div id="forestCompareHansenLegend" class="forestHansenLegend"></div>
+                  </section>
+                </div>
+              </aside>
               <div id="forestComparePostMap" class="forestCompareMap"></div>
             </article>
           </div>
@@ -370,7 +411,7 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/frontend/app.js?v=forest-iter2-17"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-iter2-17"></script>
+    <script src="/frontend/app.js?v=forest-iter2-20"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-iter2-20"></script>
   </body>
 </html>

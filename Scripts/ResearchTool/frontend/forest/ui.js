@@ -1,4 +1,4 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-17";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-20";
 import {
   analyzeHansen,
   cancelForestJob,
@@ -13,8 +13,8 @@ import {
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-17";
-import { forestState } from "./state.js?v=forest-iter2-17";
+} from "./samples.js?v=forest-iter2-20";
+import { forestState } from "./state.js?v=forest-iter2-20";
 
 function $(id) {
   return document.getElementById(id);
@@ -110,6 +110,54 @@ function statusLabel(status) {
   return status === "TOO_OLD" ? "Too old" : status;
 }
 
+function currentHansenOverlay(detail = forestState.selectedDetail) {
+  const masks = detail?.hansen?.masks || [];
+  const layer = forestState.hansenLayer || "dominant_year";
+  const exact =
+    masks.find((mask) => mask.mask_type === `aoi_${layer}`)
+    || masks.find((mask) => mask.mask_type === layer)
+    || null;
+  if (layer === "treecover2000") return exact;
+  return (
+    exact
+    || masks.find((mask) => mask.mask_type === "aoi_dominant_year")
+    || masks.find((mask) => mask.mask_type === "dominant_year")
+    || masks.find((mask) => mask.mask_type === "aoi_all_loss")
+    || masks.find((mask) => mask.mask_type === "all_loss")
+    || null
+  );
+}
+
+function renderHansenLegend(hostId = "forestHansenLegend", detail = forestState.selectedDetail) {
+  const host = $(hostId);
+  if (!host) return;
+
+  const overlay = currentHansenOverlay(detail);
+  const legend = overlay?.legend || [];
+  if (forestState.hansenLayer !== "all_loss") {
+    host.innerHTML = `<div class="meta">Legend is shown for all loss.</div>`;
+    return;
+  }
+  if (!legend.length) {
+    host.innerHTML = `<div class="meta">No Hansen loss years in current view.</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="forestHansenLegendTitle">Loss year</div>
+    <div class="forestHansenLegendItems">
+      ${legend
+        .map((item) => `
+          <span class="forestHansenLegendItem">
+            <i style="background:${escapeHtml(item.color)}"></i>
+            <span>${escapeHtml(item.year)}</span>
+          </span>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
 function renderLayerPanelState() {
   const panel = $("mapLayerPanel");
   const openButton = $("mapLayerPanelOpen");
@@ -120,12 +168,32 @@ function renderLayerPanelState() {
   closeButton.hidden = forestState.layerPanelCollapsed;
   openButton.setAttribute("aria-expanded", "false");
   closeButton.setAttribute("aria-expanded", "true");
+  renderHansenLegend();
 }
 
 function setLayerPanelCollapsed(collapsed) {
   forestState.layerPanelCollapsed = collapsed;
   renderLayerPanelState();
   window.pipelineExplorer?.refreshMapLayout();
+}
+
+function renderCompareLayerPanelState() {
+  const panel = $("forestCompareLayerPanel");
+  const openButton = $("forestCompareLayerPanelOpen");
+  const closeButton = $("forestCompareLayerPanelClose");
+  if (!panel || !openButton || !closeButton) return;
+  panel.classList.toggle("collapsed", forestState.compareLayerPanelCollapsed);
+  openButton.hidden = !forestState.compareLayerPanelCollapsed;
+  closeButton.hidden = forestState.compareLayerPanelCollapsed;
+  openButton.setAttribute("aria-expanded", "false");
+  closeButton.setAttribute("aria-expanded", "true");
+  renderHansenLegend("forestCompareHansenLegend", forestState.selectedDetail);
+}
+
+function setCompareLayerPanelCollapsed(collapsed) {
+  forestState.compareLayerPanelCollapsed = collapsed;
+  renderCompareLayerPanelState();
+  Object.values(forestState.compareMaps).forEach((map) => map?.invalidateSize());
 }
 
 function toggleSidebar() {
@@ -651,14 +719,7 @@ function canCompareSentinel(sample) {
 }
 
 function compareHansenOverlay(sample) {
-  const masks = sample?.hansen?.masks || [];
-  return (
-    masks.find((mask) => mask.mask_type === "aoi_dominant_year")
-    || masks.find((mask) => mask.mask_type === "dominant_year")
-    || masks.find((mask) => mask.mask_type === "aoi_all_loss")
-    || masks.find((mask) => mask.mask_type === "all_loss")
-    || null
-  );
+  return currentHansenOverlay(sample);
 }
 
 function ensureCompareSelections(sample) {
@@ -730,7 +791,12 @@ function renderCompareMap(kind, download, preview, hansenOverlay) {
     forestState.compareLayers[`${kind}Hansen`] = L.imageOverlay(
       hansenOverlay.png_url,
       bboxToBounds(hansenOverlay.bbox),
-      { pane: "compareHansenPane", opacity: forestState.compareHansenOpacity, interactive: false },
+      {
+        pane: "compareHansenPane",
+        opacity: forestState.compareHansenOpacity,
+        interactive: false,
+        className: `forestHansenOverlay ${forestState.hansenPixelated ? "pixelated" : ""}`,
+      },
     ).addTo(map);
   }
 
@@ -756,7 +822,9 @@ function renderCompareView() {
   $("forestCompareLayerSelect").innerHTML = compareViewOptions(sample);
   $("forestComparePreSelect").innerHTML = compareDownloadOptions(compareDownloads(sample, "PRE"), pre?.download_id);
   $("forestComparePostSelect").innerHTML = compareDownloadOptions(compareDownloads(sample, "POST"), post?.download_id);
+  $("forestCompareHansenLayerSelect").value = forestState.hansenLayer;
   $("forestCompareHansenToggle").checked = forestState.compareShowHansen;
+  $("forestComparePixelatedToggle").checked = forestState.hansenPixelated;
   $("forestCompareHansenOpacityInput").value = String(Math.round(forestState.compareHansenOpacity * 100));
   $("forestComparePreMeta").textContent = compareDownloadMeta(pre, prePreview);
   $("forestComparePostMeta").textContent = compareDownloadMeta(post, postPreview);
@@ -768,6 +836,7 @@ function renderCompareView() {
     : `${selectedName}: ${sentinelViewLabel(forestState.compareView)} PRE/POST`;
 
   bindCompareControls();
+  renderCompareLayerPanelState();
   renderCompareMap("pre", pre, prePreview, hansenOverlay);
   renderCompareMap("post", post, postPreview, hansenOverlay);
 }
@@ -794,8 +863,16 @@ function closeCompareView(options = {}) {
 
 function bindCompareControls() {
   $("forestCompareCloseBtn").onclick = () => closeCompareView();
+  $("forestCompareLayerPanelOpen").onclick = () => setCompareLayerPanelCollapsed(false);
+  $("forestCompareLayerPanelClose").onclick = () => setCompareLayerPanelCollapsed(true);
   $("forestCompareLayerSelect").onchange = (event) => {
     forestState.compareView = event.target.value || "rgb";
+    renderCompareView();
+  };
+  $("forestCompareHansenLayerSelect").onchange = (event) => {
+    forestState.hansenLayer = event.target.value || "dominant_year";
+    $("forestHansenLayerSelect").value = forestState.hansenLayer;
+    renderMap();
     renderCompareView();
   };
   $("forestComparePreSelect").onchange = (event) => {
@@ -808,6 +885,12 @@ function bindCompareControls() {
   };
   $("forestCompareHansenToggle").onchange = (event) => {
     forestState.compareShowHansen = event.target.checked;
+    renderCompareView();
+  };
+  $("forestComparePixelatedToggle").onchange = (event) => {
+    forestState.hansenPixelated = event.target.checked;
+    $("forestHansenPixelatedToggle").checked = forestState.hansenPixelated;
+    renderMap();
     renderCompareView();
   };
   $("forestCompareHansenOpacityInput").oninput = (event) => {
@@ -1202,6 +1285,7 @@ function renderMap(fit = false) {
     onSelect: (sampleId) => run(() => selectSample(sampleId)),
     fit,
   });
+  renderHansenLegend();
 }
 
 function clearSelectedSample() {
@@ -1676,6 +1760,7 @@ function bindEvents() {
   $("forestHansenLayerSelect").addEventListener("change", (event) => {
     forestState.hansenLayer = event.target.value;
     renderMap();
+    if (forestState.compareOpen) renderCompareView();
   });
   $("forestHansenOpacityInput").addEventListener("input", (event) => {
     forestState.hansenOpacity = Number(event.target.value) / 100;
@@ -1685,8 +1770,14 @@ function bindEvents() {
       renderMap();
     }
   });
+  $("forestHansenPixelatedToggle").addEventListener("change", (event) => {
+    forestState.hansenPixelated = event.target.checked;
+    renderMap();
+    if (forestState.compareOpen) renderCompareView();
+  });
   $("forestHansenLayerSelect").value = forestState.hansenLayer;
   $("forestHansenOpacityInput").value = String(Math.round(forestState.hansenOpacity * 100));
+  $("forestHansenPixelatedToggle").checked = forestState.hansenPixelated;
   renderLayerPanelState();
 }
 

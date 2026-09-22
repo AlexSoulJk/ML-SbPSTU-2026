@@ -27,6 +27,7 @@ export const forestState = {
   },
   hansenLayer: "dominant_year",
   hansenOpacity: 0.72,
+  hansenPixelated: true,
   includeHansenTreecover: false,
   includeBatchHansenTreecover: false,
   layerPanelCollapsed: false,
@@ -47,6 +48,7 @@ export const forestState = {
   comparePostDownloadId: null,
   compareShowHansen: true,
   compareHansenOpacity: 0.68,
+  compareLayerPanelCollapsed: true,
   compareMaps: {
     pre: null,
     post: null,
