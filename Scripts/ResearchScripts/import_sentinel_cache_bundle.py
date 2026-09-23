@@ -122,7 +122,10 @@ def copy_bundle_file(bundle_dir: Path, row: dict[str, Any]) -> dict[str, Any]:
     }
 
     if not source.exists():
-        result["action"] = "missing_bundle_file"
+        if row.get("action") == "missing_source":
+            result["action"] = "missing_source_at_export"
+        else:
+            result["action"] = "missing_bundle_file"
         return result
     if target.exists() and not OVERWRITE_EXISTING:
         result["action"] = "skip_exists"
@@ -233,7 +236,11 @@ def main() -> None:
 
     action_counts = Counter(row["action"] for row in rows)
     kind_counts = Counter(row["kind"] for row in rows)
-    missing_by_kind = Counter(row["kind"] for row in rows if row["action"] == "missing_bundle_file")
+    unavailable_by_kind = Counter(
+        row["kind"]
+        for row in rows
+        if row["action"] in {"missing_bundle_file", "missing_source_at_export"}
+    )
     copied_bytes = sum(int(row.get("bytes") or 0) for row in rows if row["action"] in {"copied", "would_copy"})
     print(f"DRY_RUN: {DRY_RUN}")
     print(f"Bundle: {bundle_path}")
@@ -241,8 +248,8 @@ def main() -> None:
     print(f"Copy bytes: {copied_bytes / 1024 / 1024:.1f} MiB")
     print(f"File kinds: {dict(sorted(kind_counts.items()))}")
     print(f"Actions: {dict(sorted(action_counts.items()))}")
-    if missing_by_kind:
-        print(f"Missing by kind: {dict(sorted(missing_by_kind.items()))}")
+    if unavailable_by_kind:
+        print(f"Unavailable by kind: {dict(sorted(unavailable_by_kind.items()))}")
     print(f"DB sync: {db_stats}")
     print(f"Report: {report_path}")
     if DRY_RUN:

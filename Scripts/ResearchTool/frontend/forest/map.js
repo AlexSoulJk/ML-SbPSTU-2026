@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=forest-iter2-20";
+import { forestState } from "./state.js?v=forest-iter2-21";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 

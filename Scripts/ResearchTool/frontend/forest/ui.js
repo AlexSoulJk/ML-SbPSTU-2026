@@ -1,4 +1,4 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-20";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-21";
 import {
   analyzeHansen,
   cancelForestJob,
@@ -13,8 +13,8 @@ import {
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-20";
-import { forestState } from "./state.js?v=forest-iter2-20";
+} from "./samples.js?v=forest-iter2-21";
+import { forestState } from "./state.js?v=forest-iter2-21";
 
 function $(id) {
   return document.getElementById(id);

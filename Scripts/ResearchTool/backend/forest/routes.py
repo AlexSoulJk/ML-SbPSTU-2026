@@ -56,6 +56,11 @@ SENTINEL_REVIEW_REASON_CODES = {
     "OTHER",
 }
 VALID_FOR_NEW_SEARCH_FILTER = "__valid_for_new_search"
+NO_MANUAL_VALIDATION_FILTER = "__no_manual_validation"
+SPECIAL_MANUAL_VALIDATION_FILTERS = {
+    VALID_FOR_NEW_SEARCH_FILTER,
+    NO_MANUAL_VALIDATION_FILTER,
+}
 HANSEN_SAMPLE_JOB_TOTAL = 5
 HANSEN_STAGE_PROGRESS = {
     "queued": 0,
@@ -237,6 +242,13 @@ def sample_conditions(
                 .exists()
             )
             conditions.extend([~manual_too_old, ~hansen_too_old])
+        elif manual_validation == NO_MANUAL_VALIDATION_FILTER:
+            has_manual_validation = (
+                select(ManualValidation.sample_id)
+                .where(ManualValidation.sample_id == Sample.sample_id)
+                .exists()
+            )
+            conditions.append(~has_manual_validation)
         else:
             conditions.append(ManualValidation.validation == manual_validation)
     return conditions
@@ -245,7 +257,7 @@ def sample_conditions(
 def samples_select(filters: dict[str, Any], *, count: bool = False) -> Any:
     manual_validation = filters.get("manual_validation")
     stmt = select(func.count()).select_from(Sample) if count else select(Sample)
-    if manual_validation and manual_validation != VALID_FOR_NEW_SEARCH_FILTER:
+    if manual_validation and manual_validation not in SPECIAL_MANUAL_VALIDATION_FILTERS:
         stmt = stmt.join(ManualValidation, ManualValidation.sample_id == Sample.sample_id)
     conditions = sample_conditions(
         q=filters.get("q"),

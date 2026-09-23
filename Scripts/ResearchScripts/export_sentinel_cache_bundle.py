@@ -284,12 +284,20 @@ def main() -> None:
         archive_path = Path(shutil.make_archive(str(bundle_dir), "zip", root_dir=bundle_dir))
 
     action_counts = Counter(row["action"] for row in files)
+    kind_counts = Counter(row["kind"] for row in files)
+    missing_source_by_kind = Counter(row["kind"] for row in files if row["action"] == "missing_source")
+    failed_by_kind = Counter(row["kind"] for row in files if row["action"] == "failed")
     total_bytes = sum(int(row["bytes"]) for row in files if row["exists"])
     print(f"DRY_RUN: {DRY_RUN}")
     print(f"Downloads: {len(downloads)}")
     print(f"Files: {len(files)}")
     print(f"Existing bytes: {total_bytes / 1024 / 1024:.1f} MiB")
+    print(f"File kinds: {dict(sorted(kind_counts.items()))}")
     print(f"Actions: {dict(sorted(action_counts.items()))}")
+    if missing_source_by_kind:
+        print(f"Missing source by kind: {dict(sorted(missing_source_by_kind.items()))}")
+    if failed_by_kind:
+        print(f"Failed by kind: {dict(sorted(failed_by_kind.items()))}")
     print(f"Bundle dir: {bundle_dir}")
     print(f"Report: {report_path}")
     if not DRY_RUN:
