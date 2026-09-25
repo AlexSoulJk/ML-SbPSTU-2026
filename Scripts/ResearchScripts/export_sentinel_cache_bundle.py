@@ -12,13 +12,20 @@ from typing import Any
 from sqlalchemy import select
 
 
-DRY_RUN = True
+DRY_RUN = False
 
 # Export all Sentinel downloads by default. Restrict these for smaller bundles.
 PERIODS: tuple[str, ...] | None = None
 SAMPLE_ID_PREFIXES: tuple[str, ...] = ()
 DOWNLOAD_ID_PREFIXES: tuple[str, ...] = ()
 LIMIT_DOWNLOADS = None
+
+# Bundle profiles:
+# - "geotiff_only": transfer GeoTIFF + sidecar metadata; rebuild previews locally.
+# - "preview_only": transfer derived PNG previews + preview metadata only.
+# - "full": transfer GeoTIFF, sidecar metadata, and derived previews.
+# - "custom": use INCLUDE_* flags below directly.
+BUNDLE_PROFILE = "geotiff_only"
 
 INCLUDE_RASTERS = True
 INCLUDE_RASTER_METADATA = True
@@ -31,13 +38,31 @@ SCRIPTS_ROOT = PROJECT_ROOT / "Scripts"
 RESEARCH_TOOL_ROOT = SCRIPTS_ROOT / "ResearchTool"
 sys.path.insert(0, str(RESEARCH_TOOL_ROOT))
 
-from backend.forest.database import SessionLocal  # noqa: E402
+from backend.forest.database import SessionLocal, init_forest_database  # noqa: E402
 from backend.forest.models import DerivedPreview, SentinelDownload  # noqa: E402
 from backend.forest.storage_paths import resolve_storage_path, to_storage_path  # noqa: E402
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_ROOT / "Outputs"
+
+BUNDLE_PROFILES = {
+    "geotiff_only": {
+        "include_rasters": True,
+        "include_raster_metadata": True,
+        "include_previews": False,
+    },
+    "preview_only": {
+        "include_rasters": False,
+        "include_raster_metadata": False,
+        "include_previews": True,
+    },
+    "full": {
+        "include_rasters": True,
+        "include_raster_metadata": True,
+        "include_previews": True,
+    },
+}
 
 
 def now_tag() -> str:
@@ -65,6 +90,19 @@ def display_path(path: str | Path | None) -> str:
         return str(resolved.resolve(strict=False).relative_to(PROJECT_ROOT.resolve(strict=False)))
     except ValueError:
         return str(resolved)
+
+
+def active_bundle_options() -> dict[str, bool]:
+    if BUNDLE_PROFILE == "custom":
+        return {
+            "include_rasters": INCLUDE_RASTERS,
+            "include_raster_metadata": INCLUDE_RASTER_METADATA,
+            "include_previews": INCLUDE_PREVIEWS,
+        }
+    if BUNDLE_PROFILE not in BUNDLE_PROFILES:
+        allowed = ", ".join([*sorted(BUNDLE_PROFILES), "custom"])
+        raise ValueError(f"BUNDLE_PROFILE must be one of: {allowed}")
+    return BUNDLE_PROFILES[BUNDLE_PROFILE]
 
 
 def selected_downloads(db) -> list[SentinelDownload]:
@@ -131,8 +169,9 @@ def add_file(
 
 def collect_bundle_files(db, downloads: list[SentinelDownload]) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
+    options = active_bundle_options()
     for download in downloads:
-        if INCLUDE_RASTERS:
+        if options["include_rasters"]:
             raster_path = resolve_storage_path(download.local_path)
             add_file(
                 files,
@@ -143,7 +182,7 @@ def collect_bundle_files(db, downloads: list[SentinelDownload]) -> list[dict[str
                 scene_id=download.scene_id,
                 period=download.period,
             )
-            if INCLUDE_RASTER_METADATA:
+            if options["include_raster_metadata"]:
                 add_file(
                     files,
                     kind="sentinel_raster_metadata",
@@ -154,7 +193,7 @@ def collect_bundle_files(db, downloads: list[SentinelDownload]) -> list[dict[str
                     period=download.period,
                 )
 
-        if INCLUDE_PREVIEWS:
+        if options["include_previews"]:
             previews = list(
                 db.scalars(
                     select(DerivedPreview)
@@ -227,6 +266,7 @@ def write_csv(rows: list[dict[str, Any]], path: Path) -> None:
 
 
 def write_manifest(bundle_dir: Path, downloads: list[SentinelDownload], files: list[dict[str, Any]]) -> Path:
+    options = active_bundle_options()
     manifest = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "bundle_name": bundle_dir.name,
@@ -237,9 +277,8 @@ def write_manifest(bundle_dir: Path, downloads: list[SentinelDownload], files: l
             "sample_id_prefixes": list(SAMPLE_ID_PREFIXES),
             "download_id_prefixes": list(DOWNLOAD_ID_PREFIXES),
             "limit_downloads": LIMIT_DOWNLOADS,
-            "include_rasters": INCLUDE_RASTERS,
-            "include_raster_metadata": INCLUDE_RASTER_METADATA,
-            "include_previews": INCLUDE_PREVIEWS,
+            "bundle_profile": BUNDLE_PROFILE,
+            **options,
         },
         "downloads": [
             {
@@ -261,6 +300,7 @@ def write_manifest(bundle_dir: Path, downloads: list[SentinelDownload], files: l
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    init_forest_database()
     bundle_dir = OUTPUT_DIR / f"sentinel_cache_bundle_{now_tag()}"
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
@@ -289,6 +329,8 @@ def main() -> None:
     failed_by_kind = Counter(row["kind"] for row in files if row["action"] == "failed")
     total_bytes = sum(int(row["bytes"]) for row in files if row["exists"])
     print(f"DRY_RUN: {DRY_RUN}")
+    print(f"Bundle profile: {BUNDLE_PROFILE}")
+    print(f"Bundle options: {active_bundle_options()}")
     print(f"Downloads: {len(downloads)}")
     print(f"Files: {len(files)}")
     print(f"Existing bytes: {total_bytes / 1024 / 1024:.1f} MiB")

@@ -34,9 +34,28 @@ def migrate_forest_database() -> None:
         return
 
     sample_columns = {column["name"] for column in inspector.get_columns("forest_samples")}
+    sentinel_download_columns = (
+        {column["name"] for column in inspector.get_columns("forest_sentinel_downloads")}
+        if "forest_sentinel_downloads" in table_names
+        else set()
+    )
     with engine.begin() as connection:
         if "display_name" not in sample_columns:
             connection.execute(text("ALTER TABLE forest_samples ADD COLUMN display_name VARCHAR(255)"))
+        if "has_multiple_events" not in sample_columns:
+            connection.execute(
+                text("ALTER TABLE forest_samples ADD COLUMN has_multiple_events BOOLEAN NOT NULL DEFAULT 0")
+            )
+        if "nodata_fraction" not in sentinel_download_columns:
+            connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN nodata_fraction FLOAT"))
+        if "dark_fraction" not in sentinel_download_columns:
+            connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN dark_fraction FLOAT"))
+        if "is_bad_quality" not in sentinel_download_columns:
+            connection.execute(
+                text("ALTER TABLE forest_sentinel_downloads ADD COLUMN is_bad_quality BOOLEAN NOT NULL DEFAULT 0")
+            )
+        if "quality_flags_json" not in sentinel_download_columns:
+            connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN quality_flags_json TEXT"))
 
 
 def get_db() -> Iterator[Session]:

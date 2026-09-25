@@ -1,150 +1,14 @@
 from pathlib import Path
-
 import numpy as np
-import torch
-import open_clip
-from PIL import Image
-from huggingface_hub import hf_hub_download
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity
+from ResearchScripts.ml_tests.utils.loader import load_metadata_from_folder
+from ResearchScripts.ml_tests.utils.data_processing import group_by_samples_and_period
 
 
-MODEL_NAME = "ViT-B-32"
-CACHE_DIR = Path(r"C:\Users\Hp\OneDrive\Рабочий стол\учёба\ML\ML-SbPSTU-2026\checkpoints")
-MODEL_PATH = r"C:\Users\Hp\OneDrive\Рабочий стол\учёба\ML\ML-SbPSTU-2026\checkpoints\models--chendelong--RemoteCLIP\snapshots\bf1d8a3ccf2ddbf7c875705e46373bfe542bce38\RemoteCLIP-ViT-B-32.pt"
-
-# 1. Скачиваем RemoteCLIP checkpoint.
-# checkpoint_path = hf_hub_download(
-#     repo_id="chendelong/RemoteCLIP",
-#     filename=f"RemoteCLIP-{MODEL_NAME}.pt",
-#     cache_dir="./checkpoints",
-# )
-
-# print("Checkpoint:", checkpoint_path)
-
-# 2. Создаем архитектуру OpenCLIP.
-model, _, preprocess = open_clip.create_model_and_transforms(MODEL_NAME)
-
-# 3. Загружаем веса RemoteCLIP.
-checkpoint = torch.load(
-    MODEL_PATH,
-    map_location="cpu",
-)
-
-result = model.load_state_dict(checkpoint)
-print(result)
-
-device = torch.device("cpu")
-model = model.to(device).eval()
 
 
-def get_embedding(image_path: str) -> np.ndarray:
-    image = Image.open(image_path).convert("RGB")
-    image = preprocess(image).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        features = model.encode_image(image)
-
-        # cosine-friendly normalized embedding
-        features = features / features.norm(dim=-1, keepdim=True)
-
-    return features.cpu().numpy()[0]
-
-def load_metadata_from_folder(folder_path):
-    metadata_file = Path(folder_path) / "metadata" / "images_metadata.json"
-    if metadata_file.exists():
-        import json
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            images_info = json.load(f)
-        return images_info
-    else:
-        print(f"Metadata file not found: {metadata_file}")
-        return None
-
-def group_by_samples_and_period(images_info):
-    grouped_data = {}
-    for image in images_info.values():
-        sample_id = image["sample_id"]
-        period = image["period"]
-        if sample_id not in grouped_data:
-            grouped_data[sample_id] = {}
-        if period not in grouped_data[sample_id]:
-            grouped_data[sample_id][period] = []
-        grouped_data[sample_id][period].append(image)
-    return grouped_data
-
-def embedding_consistency_loo(embeddings):
-    X = np.stack(embeddings)
-
-    result = []
-
-    for i in range(len(X)):
-        if len(X) == 1:
-            result.append(np.nan)
-            continue
-
-        others = np.delete(X, i, axis=0)
-
-        center = others.mean(axis=0)
-        center /= np.linalg.norm(center)
-
-        sim = float(np.dot(X[i], center))
-        result.append(sim)
-
-    return np.array(result)
-
-def aggregate_embeddings_by_sample_and_period(embeddings_for_period):
-    X = np.stack(embeddings_for_period)
-    z = X.mean(axis=0)
-    z /= np.linalg.norm(z)
-    similarities = embedding_consistency_loo(embeddings_for_period)
-    return z, similarities
-
-def calculate_cosine_similarity(embedding1, embedding2):
-    similarity = np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
-    return similarity
-    
-def get_butch_embeddings(images_info_grouped):
-    embeddings_pre = []
-    embeddings_post = []
-    labels_pre = []
-    labels_post = []
-    statistic_info = {"cosine_similarity_at_one_point": {}}
-    for sample_id, periods in images_info_grouped.items():
-        sample_statistic = statistic_info["cosine_similarity_at_one_point"].get(sample_id, None)
-        
-        if sample_statistic is None:
-            statistic_info["cosine_similarity_at_one_point"][sample_id] = {}
-            
-        for period, images in periods.items():
-            embeddings_for_period = []
-            
-            sample_statistic_period = statistic_info["cosine_similarity_at_one_point"][sample_id].get(period, None)
-                    
-            if sample_statistic_period is None:
-                statistic_info["cosine_similarity_at_one_point"][sample_id][period] = {}
-            
-            for image in images:
-                embedding = get_embedding(image["path"])
-                embeddings_for_period.append(embedding)
-            
-            aggregate_embedding, similarities = aggregate_embeddings_by_sample_and_period(embeddings_for_period)
-            
-            if period == "PRE":
-                embeddings_pre.append(aggregate_embedding)
-                labels_pre.append(images[0]["label"])
-                
-                
-            elif period == "POST":
-                embeddings_post.append(aggregate_embedding)
-                labels_post.append(images[0]["label"])
-                
-            statistic_info["cosine_similarity_at_one_point"][sample_id][period] = \
-            (similarities.tolist(), list(map(lambda x: x["image_id"], images)))
-            
-            
-    return embeddings_pre, labels_pre, embeddings_post, labels_post, statistic_info
 
 def plot_pca(X, labels, title):
     pca = PCA(n_components=2)
@@ -391,11 +255,11 @@ permutation_test(np.array(embeddings_post) - np.array(embeddings_pre), np.array(
 # Random: 2.8531200997531416e-05 +/- 0.011656466695485557
 # p-value: 0.0037996200379962005
 
-observed, random_scores = permutation_test_post_vs_pre(
-    np.array(embeddings_pre),
-    np.array(embeddings_post),
-    np.array(labels_post)
-)
+# observed, random_scores = permutation_test_post_vs_pre(
+#     np.array(embeddings_pre),
+#     np.array(embeddings_post),
+#     np.array(labels_post)
+# )
 
 # print("POST - PRE observed:", observed)
 # print(

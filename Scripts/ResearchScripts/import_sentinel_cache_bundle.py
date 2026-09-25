@@ -25,7 +25,7 @@ SCRIPTS_ROOT = PROJECT_ROOT / "Scripts"
 RESEARCH_TOOL_ROOT = SCRIPTS_ROOT / "ResearchTool"
 sys.path.insert(0, str(RESEARCH_TOOL_ROOT))
 
-from backend.forest.database import SessionLocal  # noqa: E402
+from backend.forest.database import SessionLocal, init_forest_database  # noqa: E402
 from backend.forest.models import DerivedPreview, SentinelDownload  # noqa: E402
 
 
@@ -227,6 +227,7 @@ def write_report(rows: list[dict[str, Any]]) -> Path:
 
 
 def main() -> None:
+    init_forest_database()
     bundle_path = BUNDLE_PATH or latest_bundle_path()
     bundle_dir = resolve_bundle_dir(bundle_path)
     manifest = read_manifest(bundle_dir)

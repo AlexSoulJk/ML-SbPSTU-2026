@@ -37,6 +37,13 @@ S2_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12", "SCL", "dataMask"]
 SENTINEL_VIEWS = ["rgb", "false_color", "ndvi", "nbr", "ndmi", "scl"]
 SCL_CLOUD_CLASSES = {8, 9, 10}
 SCL_SHADOW_CLASSES = {3}
+SENTINEL_CLOUD_THRESHOLD = 0.30
+SENTINEL_SHADOW_THRESHOLD = 0.35
+SENTINEL_NODATA_THRESHOLD = 0.10
+SENTINEL_DARK_FRACTION_THRESHOLD = 0.65
+SENTINEL_DARK_BRIGHTNESS_THRESHOLD = 350.0
+SENTINEL_DARK_P95_THRESHOLD = 600.0
+AUTO_REVIEW_NOTES = "Auto-excluded by local Sentinel quality metrics."
 
 
 @dataclass(frozen=True)
@@ -399,23 +406,109 @@ def derive_previews(
     return metadata
 
 
-def cloud_metrics(tif_path: Path) -> dict[str, float | bool]:
+def cloud_metrics(tif_path: Path) -> dict[str, Any]:
     with rasterio.open(tif_path) as dataset:
+        blue = dataset.read(1).astype(np.float32)
+        green = dataset.read(2).astype(np.float32)
+        red = dataset.read(3).astype(np.float32)
+        nir = dataset.read(4).astype(np.float32)
+        swir1 = dataset.read(5).astype(np.float32)
+        swir2 = dataset.read(6).astype(np.float32)
         scl = dataset.read(7)
         data_mask = dataset.read(8) > 0
-    valid_count = int(data_mask.sum())
+    total_count = int(data_mask.size)
+    emptyish = data_mask & ((blue + green + red + nir + swir1 + swir2) <= 0)
+    valid = data_mask & ~emptyish
+    valid_count = int(valid.sum())
+    nodata_count = int((~valid).sum())
+    nodata_fraction = float(nodata_count / total_count) if total_count else 1.0
     if valid_count == 0:
-        return {"cloud_fraction": 0.0, "shadow_fraction": 0.0, "is_bad_cloud": False}
+        return {
+            "cloud_fraction": 0.0,
+            "shadow_fraction": 0.0,
+            "nodata_fraction": 1.0,
+            "dark_fraction": 1.0,
+            "brightness_p50": 0.0,
+            "brightness_p95": 0.0,
+            "is_bad_cloud": False,
+            "is_bad_shadow": False,
+            "is_bad_nodata": True,
+            "is_too_dark": True,
+            "is_bad_quality": True,
+            "quality_flags": ["NO_DATA_OR_BLACK_PIXELS", "TOO_DARK_OR_LOW_CONTRAST"],
+        }
 
-    cloud = np.isin(scl, list(SCL_CLOUD_CLASSES)) & data_mask
-    shadow = np.isin(scl, list(SCL_SHADOW_CLASSES)) & data_mask
+    cloud = np.isin(scl, list(SCL_CLOUD_CLASSES)) & valid
+    shadow = np.isin(scl, list(SCL_SHADOW_CLASSES)) & valid
     cloud_fraction = float(cloud.sum() / valid_count)
     shadow_fraction = float(shadow.sum() / valid_count)
+    brightness = (red + green + blue) / 3.0
+    valid_brightness = brightness[valid & np.isfinite(brightness)]
+    dark_fraction = (
+        float((valid_brightness < SENTINEL_DARK_BRIGHTNESS_THRESHOLD).sum() / valid_brightness.size)
+        if valid_brightness.size
+        else 1.0
+    )
+    brightness_p50 = float(np.percentile(valid_brightness, 50)) if valid_brightness.size else 0.0
+    brightness_p95 = float(np.percentile(valid_brightness, 95)) if valid_brightness.size else 0.0
+    is_bad_cloud = cloud_fraction > SENTINEL_CLOUD_THRESHOLD
+    is_bad_shadow = shadow_fraction > SENTINEL_SHADOW_THRESHOLD
+    is_bad_nodata = nodata_fraction > SENTINEL_NODATA_THRESHOLD
+    is_too_dark = (
+        dark_fraction > SENTINEL_DARK_FRACTION_THRESHOLD
+        or brightness_p95 < SENTINEL_DARK_P95_THRESHOLD
+    )
+    quality_flags = []
+    if is_bad_nodata:
+        quality_flags.append("NO_DATA_OR_BLACK_PIXELS")
+    if is_bad_cloud:
+        quality_flags.append("CLOUDS")
+    if is_bad_shadow:
+        quality_flags.append("CLOUD_SHADOW")
+    if is_too_dark:
+        quality_flags.append("TOO_DARK_OR_LOW_CONTRAST")
     return {
         "cloud_fraction": round(cloud_fraction, 4),
         "shadow_fraction": round(shadow_fraction, 4),
-        "is_bad_cloud": cloud_fraction > 0.30,
+        "nodata_fraction": round(nodata_fraction, 4),
+        "dark_fraction": round(dark_fraction, 4),
+        "brightness_p50": round(brightness_p50, 2),
+        "brightness_p95": round(brightness_p95, 2),
+        "is_bad_cloud": is_bad_cloud,
+        "is_bad_shadow": is_bad_shadow,
+        "is_bad_nodata": is_bad_nodata,
+        "is_too_dark": is_too_dark,
+        "is_bad_quality": bool(quality_flags),
+        "quality_flags": quality_flags,
     }
+
+
+def auto_review_reason(metrics: dict[str, Any]) -> str | None:
+    flags = set(metrics.get("quality_flags") or [])
+    for reason in ("NO_DATA_OR_BLACK_PIXELS", "CLOUDS", "CLOUD_SHADOW", "TOO_DARK_OR_LOW_CONTRAST"):
+        if reason in flags:
+            return reason
+    return None
+
+
+def apply_auto_scene_review(db: Session, download_id: str, metrics: dict[str, Any]) -> None:
+    reason_code = auto_review_reason(metrics)
+    if reason_code is None:
+        return
+    existing = db.scalar(
+        select(SentinelSceneReview).where(SentinelSceneReview.download_id == download_id)
+    )
+    if existing is not None:
+        return
+    db.add(
+        SentinelSceneReview(
+            download_id=download_id,
+            is_excluded=True,
+            reason_code=reason_code,
+            reason_text=None,
+            notes=AUTO_REVIEW_NOTES,
+        )
+    )
 
 
 def download_sentinel_for_sample(
@@ -508,8 +601,13 @@ def download_sentinel_for_sample(
     existing.bands_json = json.dumps(S2_BANDS)
     existing.cloud_fraction = float(metrics["cloud_fraction"])
     existing.shadow_fraction = float(metrics["shadow_fraction"])
+    existing.nodata_fraction = float(metrics["nodata_fraction"])
+    existing.dark_fraction = float(metrics["dark_fraction"])
     existing.is_bad_cloud = bool(metrics["is_bad_cloud"])
+    existing.is_bad_quality = bool(metrics["is_bad_quality"])
+    existing.quality_flags_json = json.dumps(metrics["quality_flags"], ensure_ascii=False, sort_keys=True)
     existing.metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    apply_auto_scene_review(db, download_id, metrics)
     db.commit()
 
     return {
@@ -526,6 +624,10 @@ def download_sentinel_for_sample(
         "cache_status": cache_status,
         "cloud_fraction": metrics["cloud_fraction"],
         "shadow_fraction": metrics["shadow_fraction"],
+        "nodata_fraction": metrics["nodata_fraction"],
+        "dark_fraction": metrics["dark_fraction"],
+        "is_bad_quality": metrics["is_bad_quality"],
+        "quality_flags": metrics["quality_flags"],
         "is_bad_cloud": metrics["is_bad_cloud"],
         "previews": previews,
     }
@@ -540,6 +642,16 @@ def sentinel_review_payload(review: SentinelSceneReview | None) -> dict[str, Any
         "created_at": review.created_at.isoformat() if review is not None and review.created_at else None,
         "updated_at": review.updated_at.isoformat() if review is not None and review.updated_at else None,
     }
+
+
+def json_or_list(value: str | None) -> list[Any]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[str, Any]:
@@ -561,7 +673,11 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         "local_path": download.local_path,
         "cloud_fraction": download.cloud_fraction,
         "shadow_fraction": download.shadow_fraction,
+        "nodata_fraction": download.nodata_fraction,
+        "dark_fraction": download.dark_fraction,
         "is_bad_cloud": download.is_bad_cloud,
+        "is_bad_quality": download.is_bad_quality,
+        "quality_flags": json_or_list(download.quality_flags_json),
         "review": sentinel_review_payload(review),
         "previews": [
             {

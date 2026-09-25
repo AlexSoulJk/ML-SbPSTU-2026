@@ -1,4 +1,4 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-21";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-22";
 import {
   analyzeHansen,
   cancelForestJob,
@@ -10,11 +10,12 @@ import {
   listForestSamples,
   saveManualValidation,
   saveSampleDisplayName,
+  saveSampleFlags,
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-21";
-import { forestState } from "./state.js?v=forest-iter2-21";
+} from "./samples.js?v=forest-iter2-22";
+import { forestState } from "./state.js?v=forest-iter2-22";
 
 function $(id) {
   return document.getElementById(id);
@@ -291,6 +292,7 @@ function sampleCard(sample, options = {}) {
     <strong>${escapeHtml(displayName)} ${sample.is_saved ? '<i class="forestSavedShape" aria-label="saved"></i>' : ""}</strong>
     <span>${escapeHtml(sample.driver_primary || "unknown")} / ${escapeHtml(sample.confidence_primary || "n/a")}</span>
     ${sample.manual_validation ? `<span>${escapeHtml(sample.manual_validation)}</span>` : ""}
+    ${sample.has_multiple_events ? `<span class="forestSampleBadge multiEvent">multi-event</span>` : ""}
     ${hansenRunning ? `<span class="forestSampleCardJob"><i class="forestSpinner" aria-hidden="true"></i>${escapeHtml(hansenStageLabel(forestState.hansenJob.stage))}</span>` : ""}
   `;
   card.addEventListener("click", () => run(() => selectSample(sample.sample_id, { fit: true })));
@@ -1060,6 +1062,10 @@ function renderPointInfo(sample) {
           </label>
           <button id="forestSaveNameBtn" type="button">Save name</button>
         </div>
+        <label class="forestSampleFlagCheck">
+          <input id="forestMultipleEventsInput" type="checkbox" ${sample.has_multiple_events ? "checked" : ""} />
+          <span>Multiple loss events</span>
+        </label>
         <div class="forestDetailGrid">
           <div><span>Driver</span><strong>${escapeHtml(sample.driver_primary || "unknown")}</strong></div>
           <div><span>Confidence</span><strong>${escapeHtml(sample.confidence_primary || "n/a")}</strong></div>
@@ -1176,6 +1182,9 @@ function renderDetail() {
   $("forestManualValidation").value = sample.manual_validation || suggestedValidation;
   $("forestManualNotes").value = sample.manual_notes || "";
   $("forestSaveNameBtn").addEventListener("click", () => run(saveSampleName));
+  $("forestMultipleEventsInput").addEventListener("change", (event) => {
+    run(() => saveSampleEventFlags(event.target.checked));
+  });
   $("forestImageIdInput").addEventListener("input", (event) => {
     forestState.sentinelImageIdQuery = event.target.value;
     renderSentinelDownloadsPanel();
@@ -1654,6 +1663,19 @@ async function saveSampleName() {
   renderDetail();
   await refreshSamples();
   setForestStatus(`sample name saved: ${sampleDisplayName(forestState.selectedDetail)}`);
+}
+
+async function saveSampleEventFlags(hasMultipleEvents) {
+  if (!forestState.selectedSampleId) return;
+  setForestStatus("saving sample flags");
+  forestState.selectedDetail = await saveSampleFlags(forestState.selectedSampleId, {
+    has_multiple_events: hasMultipleEvents,
+  });
+  ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
+  await refreshSamples();
+  renderDetail();
+  renderMap();
+  setForestStatus(hasMultipleEvents ? "sample marked as multi-event" : "multi-event mark removed");
 }
 
 async function createExport() {

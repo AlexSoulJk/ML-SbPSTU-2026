@@ -6,6 +6,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import RepeatedStratifiedKFold, cross_validate
+from ml_tests.utils.loader import load_metadata_from_folder
+from ml_tests.utils.data_processing import group_by_samples_and_period
+from ml_tests.core import get_butch_embeddings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_ROOT = PROJECT_ROOT / "Scripts"
@@ -14,9 +17,6 @@ DERIVED_ROOT = RESEARCH_TOOL_ROOT / "Data" / "cache" / "forest" / "derived"
 PATH_TO_IMAGES_DATA = PROJECT_ROOT / "Scripts" / "ResearchScripts" / "Data" / "Images"
 
 sys.path.insert(0, str(SCRIPTS_ROOT))
-
-from ResearchScripts.open_clip_test import get_butch_embeddings, group_by_samples_and_period, load_metadata_from_folder
-
 
 def evaluate_linear_probe(X, labels, name, n_splits=5, n_repeats=20):
     X = np.asarray(X)

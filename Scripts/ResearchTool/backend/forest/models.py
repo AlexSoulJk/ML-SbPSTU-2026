@@ -48,6 +48,7 @@ class Sample(Base):
     region_code: Mapped[str | None] = mapped_column(String(64))
     tags: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
+    has_multiple_events: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     raw_properties_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -181,7 +182,11 @@ class SentinelDownload(Base):
     bands_json: Mapped[str] = mapped_column(Text, nullable=False)
     cloud_fraction: Mapped[float | None] = mapped_column(Float)
     shadow_fraction: Mapped[float | None] = mapped_column(Float)
+    nodata_fraction: Mapped[float | None] = mapped_column(Float)
+    dark_fraction: Mapped[float | None] = mapped_column(Float)
     is_bad_cloud: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_bad_quality: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    quality_flags_json: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 

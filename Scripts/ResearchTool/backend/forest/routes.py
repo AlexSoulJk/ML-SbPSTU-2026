@@ -82,6 +82,10 @@ class SampleNameRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
 
 
+class SampleFlagsRequest(BaseModel):
+    has_multiple_events: bool | None = None
+
+
 class SentinelSearchRequest(BaseModel):
     event_year: int | None = None
     season_preset: str = "full_snow_free"
@@ -151,6 +155,7 @@ def sample_summary(sample: Sample, *, distance_m: float | None = None) -> dict[s
         "region_code": sample.region_code,
         "tags": sample.tags,
         "notes": sample.notes,
+        "has_multiple_events": bool(sample.has_multiple_events),
         "manual_validation": sample.manual_validation.validation
         if sample.manual_validation is not None
         else None,
@@ -546,6 +551,24 @@ def save_sample_display_name(
     return sample_detail(sample, db)
 
 
+@router.post("/samples/{sample_id}/flags")
+def save_sample_flags(
+    sample_id: str,
+    request: SampleFlagsRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    sample = db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status_code=404, detail="Sample was not found.")
+
+    if request.has_multiple_events is not None:
+        sample.has_multiple_events = bool(request.has_multiple_events)
+    sample.updated_at = utc_now()
+    db.commit()
+    db.refresh(sample)
+    return sample_detail(sample, db)
+
+
 @router.post("/samples/{sample_id}/manual-validation")
 def save_manual_validation(
     sample_id: str,
@@ -596,6 +619,7 @@ def export_row(sample: Sample) -> dict[str, Any]:
         "lon": sample.lon,
         "driver": sample.driver_primary,
         "confidence": sample.confidence_primary,
+        "has_multiple_events": bool(sample.has_multiple_events),
         "source_event_year": sample.source_event_year,
         "event_year": None,
         "total_loss_area_ha": None,
@@ -686,6 +710,7 @@ def export_row_empty() -> dict[str, Any]:
         "lon": None,
         "driver": None,
         "confidence": None,
+        "has_multiple_events": None,
         "source_event_year": None,
         "event_year": None,
         "total_loss_area_ha": None,

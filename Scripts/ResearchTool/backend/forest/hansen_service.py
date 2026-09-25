@@ -25,6 +25,8 @@ from .storage_paths import forest_cache_url, resolve_storage_path, to_storage_pa
 ProgressCallback = Callable[[str, str], None]
 CancelCallback = Callable[[], bool]
 TOO_OLD_EVENT_YEAR_CUTOFF = 2016
+MULTIPLE_EVENT_YEAR_CUTOFF = 2016
+MULTIPLE_EVENT_MIN_YEAR_COUNT = 3
 HANSEN_LOSS_YEAR_ALPHA = 205
 HANSEN_LOSS_YEAR_COLORS = [
     "#1f77b4",
@@ -196,6 +198,30 @@ def status_for_loss(total_loss_area_ha: float, dominant_area_ha: float, share: f
     return "AMBIGUOUS"
 
 
+def multiple_event_metrics(histogram: list[dict[str, Any]]) -> dict[str, Any]:
+    recent_events = [
+        item
+        for item in histogram
+        if int(item.get("year") or 0) >= MULTIPLE_EVENT_YEAR_CUTOFF
+        and float(item.get("loss_area_ha") or 0) > 0
+    ]
+    recent_years = sorted({int(item["year"]) for item in recent_events})
+    return {
+        "has_multiple_events": len(recent_years) >= MULTIPLE_EVENT_MIN_YEAR_COUNT,
+        "multiple_event_years": recent_years,
+        "multiple_event_year_count": len(recent_years),
+        "multiple_event_cutoff_year": MULTIPLE_EVENT_YEAR_CUTOFF,
+        "multiple_event_min_year_count": MULTIPLE_EVENT_MIN_YEAR_COUNT,
+    }
+
+
+def apply_sample_multiple_event_flag(sample: Sample, histogram: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = multiple_event_metrics(histogram)
+    sample.has_multiple_events = bool(metrics["has_multiple_events"])
+    sample.updated_at = utc_now()
+    return metrics
+
+
 def upsert_tile(db: Session, layer: str, tile_id: str, local_path: str) -> None:
     existing = db.scalar(
         select(HansenTile).where(
@@ -290,6 +316,9 @@ def analyze_sample_hansen(
     if skip_existing:
         existing = existing_hansen_analysis(db, sample.sample_id)
         if existing is not None:
+            histogram = json.loads(existing.histogram_json)
+            apply_sample_multiple_event_flag(sample, histogram)
+            db.commit()
             report(
                 progress,
                 "done",
@@ -443,6 +472,7 @@ def analyze_sample_hansen(
         "tile_id": tile_id,
         "include_treecover": include_treecover,
         "too_old_cutoff_year": TOO_OLD_EVENT_YEAR_CUTOFF,
+        **apply_sample_multiple_event_flag(sample, histogram),
     }
     upsert_hansen_status(db, sample.sample_id, status, metrics)
     db.commit()

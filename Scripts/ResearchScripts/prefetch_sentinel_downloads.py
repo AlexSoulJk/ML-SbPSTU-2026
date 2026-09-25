@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 
 DRY_RUN = True
-ENSURE_SCHEMA = False
+ENSURE_SCHEMA = True
 
 # Set to None for all periods, or limit to a subset, for example ("PRE", "POST").
 PERIODS: tuple[str, ...] | None = None
@@ -47,6 +47,7 @@ from backend.forest.models import DerivedPreview, SentinelDownload  # noqa: E402
 from backend.forest.sentinel_service import (  # noqa: E402
     S2_BANDS,
     SENTINEL_VIEWS,
+    apply_auto_scene_review,
     cloud_metrics,
     derive_previews,
     pixel_size_for_bbox,
@@ -269,8 +270,13 @@ def sync_download_record(
     download.bands_json = json.dumps(metadata.get("bands") or S2_BANDS)
     download.cloud_fraction = float(metrics["cloud_fraction"])
     download.shadow_fraction = float(metrics["shadow_fraction"])
+    download.nodata_fraction = float(metrics["nodata_fraction"])
+    download.dark_fraction = float(metrics["dark_fraction"])
     download.is_bad_cloud = bool(metrics["is_bad_cloud"])
+    download.is_bad_quality = bool(metrics["is_bad_quality"])
+    download.quality_flags_json = json.dumps(metrics["quality_flags"], ensure_ascii=False, sort_keys=True)
     download.metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    apply_auto_scene_review(db, download.download_id, metrics)
 
 
 def selected_downloads(db) -> list[SentinelDownload]:

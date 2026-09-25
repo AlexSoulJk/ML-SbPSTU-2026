@@ -1,4 +1,4 @@
-import { api } from "./api.js?v=forest-iter2-21";
+import { api } from "./api.js?v=forest-iter2-22";
 
 function cleanFilters(filters) {
   return Object.fromEntries(
@@ -37,6 +37,13 @@ export async function saveSampleDisplayName(sampleId, displayName) {
   return api(`/api/forest/samples/${sampleId}/display-name`, {
     method: "POST",
     body: { display_name: displayName },
+  });
+}
+
+export async function saveSampleFlags(sampleId, flags) {
+  return api(`/api/forest/samples/${sampleId}/flags`, {
+    method: "POST",
+    body: flags,
   });
 }
 
