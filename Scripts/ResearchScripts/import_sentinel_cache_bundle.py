@@ -65,33 +65,29 @@ def latest_bundle_path() -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def safe_extract_zip(zip_path: Path) -> Path:
-    target_dir = OUTPUT_DIR / f"_imported_{zip_path.stem}"
-    target_root = target_dir.resolve(strict=False)
-    if DRY_RUN:
-        return target_dir
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as archive:
-        for member in archive.infolist():
-            member_path = target_dir / member.filename
-            resolved = member_path.resolve(strict=False)
-            try:
-                resolved.relative_to(target_root)
-            except ValueError as exc:
-                raise RuntimeError(f"Unsafe zip member path: {member.filename}") from exc
-        archive.extractall(target_dir)
-    return target_dir
+def is_zip_bundle(path: Path) -> bool:
+    return path.suffix.lower() == ".zip"
 
 
-def resolve_bundle_dir(path: Path) -> Path:
-    if path.suffix.lower() == ".zip":
-        return safe_extract_zip(path)
-    return path
+def zip_member_name(*parts: str) -> str:
+    return "/".join(part.strip("/\\") for part in parts if part)
 
 
-def read_manifest(bundle_dir: Path) -> dict[str, Any]:
-    manifest_path = bundle_dir / "manifest.json"
+def validate_zip_archive(archive: zipfile.ZipFile) -> None:
+    for member in archive.infolist():
+        member_path = Path(member.filename)
+        if member_path.is_absolute() or ".." in member_path.parts:
+            raise RuntimeError(f"Unsafe zip member path: {member.filename}")
+
+
+def read_manifest_from_path(path: Path, archive: zipfile.ZipFile | None = None) -> dict[str, Any]:
+    if archive is not None:
+        try:
+            return json.loads(archive.read("manifest.json").decode("utf-8"))
+        except KeyError as exc:
+            raise FileNotFoundError(f"Manifest was not found in zip: {path}") from exc
+
+    manifest_path = path / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest was not found: {manifest_path}")
     return json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -107,7 +103,7 @@ def project_destination(relative_path: str) -> Path:
     return destination
 
 
-def copy_bundle_file(bundle_dir: Path, row: dict[str, Any]) -> dict[str, Any]:
+def copy_bundle_file_from_dir(bundle_dir: Path, row: dict[str, Any]) -> dict[str, Any]:
     relative_path = str(row.get("relative_path") or "")
     source = bundle_dir / "files" / relative_path
     target = project_destination(relative_path)
@@ -138,6 +134,63 @@ def copy_bundle_file(bundle_dir: Path, row: dict[str, Any]) -> dict[str, Any]:
     shutil.copy2(source, target)
     result["action"] = "copied"
     return result
+
+
+def copy_bundle_file_from_zip(
+    bundle_path: Path,
+    archive: zipfile.ZipFile,
+    zip_entries: set[str],
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    relative_path = str(row.get("relative_path") or "")
+    member_name = zip_member_name("files", relative_path)
+    target = project_destination(relative_path)
+    source_exists = member_name in zip_entries
+    result = {
+        **row,
+        "source_in_bundle": f"{bundle_path.name}!/{member_name}",
+        "target_path": display_path(target),
+        "source_exists": source_exists,
+        "target_exists_before": target.exists(),
+        "action": "",
+        "error": "",
+    }
+
+    if not source_exists:
+        if row.get("action") == "missing_source":
+            result["action"] = "missing_source_at_export"
+        else:
+            result["action"] = "missing_bundle_file"
+        return result
+    if target.exists() and not OVERWRITE_EXISTING:
+        result["action"] = "skip_exists"
+        return result
+    if DRY_RUN:
+        result["action"] = "would_copy"
+        return result
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with archive.open(member_name) as source_handle, target.open("wb") as target_handle:
+        shutil.copyfileobj(source_handle, target_handle)
+    result["action"] = "copied"
+    return result
+
+
+def load_bundle_rows(bundle_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if is_zip_bundle(bundle_path):
+        with zipfile.ZipFile(bundle_path) as archive:
+            validate_zip_archive(archive)
+            zip_entries = {item.filename for item in archive.infolist() if not item.is_dir()}
+            manifest = read_manifest_from_path(bundle_path, archive)
+            rows = [
+                copy_bundle_file_from_zip(bundle_path, archive, zip_entries, row)
+                for row in manifest.get("files", [])
+            ]
+        return manifest, rows
+
+    manifest = read_manifest_from_path(bundle_path)
+    rows = [copy_bundle_file_from_dir(bundle_path, row) for row in manifest.get("files", [])]
+    return manifest, rows
 
 
 def sync_db_records(manifest: dict[str, Any]) -> dict[str, int]:
@@ -229,9 +282,7 @@ def write_report(rows: list[dict[str, Any]]) -> Path:
 def main() -> None:
     init_forest_database()
     bundle_path = BUNDLE_PATH or latest_bundle_path()
-    bundle_dir = resolve_bundle_dir(bundle_path)
-    manifest = read_manifest(bundle_dir)
-    rows = [copy_bundle_file(bundle_dir, row) for row in manifest.get("files", [])]
+    manifest, rows = load_bundle_rows(bundle_path)
     db_stats = sync_db_records(manifest)
     report_path = write_report(rows)
 
