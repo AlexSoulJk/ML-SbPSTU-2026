@@ -48,6 +48,7 @@ def write_report(rows: list[dict[str, object]]) -> Path:
         "png_exists",
         "metadata_exists",
         "png_url",
+        "png_url_valid",
         "error",
     ]
     with report_path.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -87,7 +88,11 @@ def preview_rows(db, download: SentinelDownload) -> list[dict[str, object]]:
         metadata_path = resolve_storage_path(preview.metadata_path)
         png_exists = png_path.exists()
         metadata_exists = metadata_path.exists()
-        status = "ok" if png_exists and metadata_exists else "missing_file"
+        png_url = forest_cache_url(preview.png_path) or ""
+        png_url_valid = bool(png_url)
+        status = "ok" if png_exists and metadata_exists and png_url_valid else "missing_file"
+        if png_exists and metadata_exists and not png_url_valid:
+            status = "invalid_cache_url"
         rows.append(
             {
                 "status": status,
@@ -101,7 +106,8 @@ def preview_rows(db, download: SentinelDownload) -> list[dict[str, object]]:
                 "metadata_path": preview.metadata_path,
                 "png_exists": png_exists,
                 "metadata_exists": metadata_exists,
-                "png_url": forest_cache_url(preview.png_path) or "",
+                "png_url": png_url,
+                "png_url_valid": png_url_valid,
                 "error": "",
             }
         )

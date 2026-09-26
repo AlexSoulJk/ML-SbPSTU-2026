@@ -37,7 +37,7 @@ S2_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12", "SCL", "dataMask"]
 SENTINEL_VIEWS = ["rgb", "false_color", "ndvi", "nbr", "ndmi", "scl"]
 SCL_CLOUD_CLASSES = {8, 9, 10}
 SCL_SHADOW_CLASSES = {3}
-SENTINEL_CLOUD_THRESHOLD = 0.30
+SENTINEL_CLOUD_THRESHOLD = 0.10
 SENTINEL_SHADOW_THRESHOLD = 0.35
 SENTINEL_NODATA_THRESHOLD = 0.10
 SENTINEL_DARK_FRACTION_THRESHOLD = 0.65
@@ -696,8 +696,12 @@ def latest_sentinel_payload(db: Session, sample_id: str) -> dict[str, Any]:
         db.scalars(
             select(SentinelDownload)
             .where(SentinelDownload.sample_id == sample_id)
-            .order_by(SentinelDownload.created_at.desc())
-            .limit(20)
+            .order_by(
+                SentinelDownload.period,
+                SentinelDownload.scene_id,
+                SentinelDownload.created_at.desc(),
+                SentinelDownload.download_id,
+            )
         )
     )
     return {
