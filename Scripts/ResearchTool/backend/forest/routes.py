@@ -27,12 +27,14 @@ from .models import (
     SampleStatus,
     SentinelDownload,
     SentinelSceneReview,
+    SentinelSceneReviewReason,
     utc_now,
 )
 from .sentinel_service import (
     download_sentinel_for_sample,
     latest_sentinel_payload,
     search_sentinel_for_sample,
+    sentinel_review_reason_payloads,
     sentinel_review_payload,
 )
 from .storage_paths import resolve_storage_path, to_storage_path
@@ -47,6 +49,7 @@ SENTINEL_REVIEW_REASON_CODES = {
     "HAZE_OR_SMOKE",
     "SNOW_OR_ICE",
     "SEASON_MISMATCH",
+    "DARK_AND_LOW_CONTRAST",
     "TOO_DARK_OR_LOW_CONTRAST",
     "NO_DATA_OR_BLACK_PIXELS",
     "AOI_NOT_COVERED",
@@ -102,6 +105,7 @@ class SentinelDownloadRequest(BaseModel):
 class SentinelReviewRequest(BaseModel):
     is_excluded: bool = False
     reason_code: str | None = Field(default=None, max_length=64)
+    reason_codes: list[str] | None = None
     reason_text: str | None = None
     notes: str | None = None
 
@@ -899,6 +903,20 @@ def clean_optional_text(value: str | None) -> str | None:
     return stripped or None
 
 
+def clean_reason_codes(request: SentinelReviewRequest) -> list[str]:
+    raw_codes = request.reason_codes
+    if raw_codes is None:
+        raw_codes = [request.reason_code] if request.reason_code else []
+
+    reason_codes: list[str] = []
+    for raw_code in raw_codes:
+        code = clean_optional_text(raw_code)
+        if not code or code in reason_codes:
+            continue
+        reason_codes.append(code)
+    return reason_codes
+
+
 @router.get("/sentinel/downloads/{download_id}/review")
 def get_sentinel_review(download_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     download = db.get(SentinelDownload, download_id)
@@ -910,7 +928,10 @@ def get_sentinel_review(download_id: str, db: Session = Depends(get_db)) -> dict
     )
     return {
         "download_id": download_id,
-        "review": sentinel_review_payload(review),
+        "review": sentinel_review_payload(
+            review,
+            sentinel_review_reason_payloads(db, download_id, review),
+        ),
     }
 
 
@@ -924,19 +945,23 @@ def save_sentinel_review(
     if download is None:
         raise HTTPException(status_code=404, detail="Sentinel download was not found.")
 
-    reason_code = clean_optional_text(request.reason_code)
+    reason_codes = clean_reason_codes(request)
+    reason_code = reason_codes[0] if reason_codes else None
     reason_text = clean_optional_text(request.reason_text)
     notes = clean_optional_text(request.notes)
 
     if request.is_excluded:
-        if not reason_code:
-            raise HTTPException(status_code=400, detail="reason_code is required when excluding a Sentinel scene.")
-        if reason_code not in SENTINEL_REVIEW_REASON_CODES:
+        if not reason_codes:
+            raise HTTPException(status_code=400, detail="reason_codes are required when excluding a Sentinel scene.")
+        invalid_codes = [code for code in reason_codes if code not in SENTINEL_REVIEW_REASON_CODES]
+        if invalid_codes:
             allowed = ", ".join(sorted(SENTINEL_REVIEW_REASON_CODES))
-            raise HTTPException(status_code=400, detail=f"reason_code must be one of: {allowed}")
-        if reason_code == "OTHER" and not reason_text:
-            raise HTTPException(status_code=400, detail="reason_text is required when reason_code is OTHER.")
+            invalid = ", ".join(invalid_codes)
+            raise HTTPException(status_code=400, detail=f"reason_codes contain invalid values ({invalid}); allowed: {allowed}")
+        if "OTHER" in reason_codes and not reason_text:
+            raise HTTPException(status_code=400, detail="reason_text is required when reason_codes include OTHER.")
     if not request.is_excluded:
+        reason_codes = []
         reason_code = None
         reason_text = None
         notes = None
@@ -950,13 +975,35 @@ def save_sentinel_review(
 
     review.is_excluded = request.is_excluded
     review.reason_code = reason_code
-    review.reason_text = reason_text
+    review.reason_text = reason_text if "OTHER" in reason_codes else None
     review.notes = notes
     review.updated_at = utc_now()
+
+    existing_reasons = list(
+        db.scalars(
+            select(SentinelSceneReviewReason).where(SentinelSceneReviewReason.download_id == download_id)
+        )
+    )
+    for existing_reason in existing_reasons:
+        db.delete(existing_reason)
+    if existing_reasons:
+        db.flush()
+    if request.is_excluded:
+        for code in reason_codes:
+            db.add(
+                SentinelSceneReviewReason(
+                    download_id=download_id,
+                    reason_code=code,
+                    reason_text=reason_text if code == "OTHER" else None,
+                )
+            )
 
     db.commit()
     db.refresh(review)
     return {
         "download_id": download_id,
-        "review": sentinel_review_payload(review),
+        "review": sentinel_review_payload(
+            review,
+            sentinel_review_reason_payloads(db, download_id, review),
+        ),
     }

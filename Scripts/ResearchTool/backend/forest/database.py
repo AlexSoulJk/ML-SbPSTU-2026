@@ -56,6 +56,19 @@ def migrate_forest_database() -> None:
             )
         if "quality_flags_json" not in sentinel_download_columns:
             connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN quality_flags_json TEXT"))
+        if (
+            "forest_sentinel_scene_reviews" in table_names
+            and "forest_sentinel_scene_review_reasons" in table_names
+        ):
+            connection.execute(
+                text(
+                    "INSERT OR IGNORE INTO forest_sentinel_scene_review_reasons "
+                    "(download_id, reason_code, reason_text, created_at) "
+                    "SELECT download_id, reason_code, reason_text, COALESCE(updated_at, created_at) "
+                    "FROM forest_sentinel_scene_reviews "
+                    "WHERE reason_code IS NOT NULL AND reason_code != ''"
+                )
+            )
 
 
 def get_db() -> Iterator[Session]:

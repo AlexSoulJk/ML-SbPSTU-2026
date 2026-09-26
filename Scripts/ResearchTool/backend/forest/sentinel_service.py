@@ -24,7 +24,14 @@ from ..cdse_client import (
 )
 from ..config import FOREST_DERIVED_CACHE_DIR, FOREST_SENTINEL_RASTER_CACHE_DIR
 from .geometry import sample_geometries
-from .models import DerivedPreview, Sample, SentinelDownload, SentinelSceneReview, SentinelSearch
+from .models import (
+    DerivedPreview,
+    Sample,
+    SentinelDownload,
+    SentinelSceneReview,
+    SentinelSceneReviewReason,
+    SentinelSearch,
+)
 from .storage_paths import forest_cache_url, to_storage_path
 
 
@@ -40,10 +47,19 @@ SCL_SHADOW_CLASSES = {3}
 SENTINEL_CLOUD_THRESHOLD = 0.10
 SENTINEL_SHADOW_THRESHOLD = 0.35
 SENTINEL_NODATA_THRESHOLD = 0.10
-SENTINEL_DARK_FRACTION_THRESHOLD = 0.65
 SENTINEL_DARK_BRIGHTNESS_THRESHOLD = 350.0
-SENTINEL_DARK_P95_THRESHOLD = 600.0
+SENTINEL_DARK_LOW_CONTRAST_REASON = "DARK_AND_LOW_CONTRAST"
+SENTINEL_DARK_LOW_CONTRAST_P95_THRESHOLD = 350.0
+SENTINEL_LOW_CONTRAST_RANGE_THRESHOLD = 100.0
+SENTINEL_LOW_CONTRAST_RELATIVE_THRESHOLD = 0.30
 AUTO_REVIEW_NOTES = "Auto-excluded by local Sentinel quality metrics."
+AUTO_REVIEW_REASON_PRIORITY = (
+    "NO_DATA_OR_BLACK_PIXELS",
+    "CLOUDS",
+    "CLOUD_SHADOW",
+    SENTINEL_DARK_LOW_CONTRAST_REASON,
+    "TOO_DARK_OR_LOW_CONTRAST",
+)
 
 
 @dataclass(frozen=True)
@@ -428,14 +444,18 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
             "shadow_fraction": 0.0,
             "nodata_fraction": 1.0,
             "dark_fraction": 1.0,
+            "brightness_p05": 0.0,
             "brightness_p50": 0.0,
             "brightness_p95": 0.0,
+            "brightness_p95_minus_p05": 0.0,
+            "brightness_relative_contrast": 0.0,
             "is_bad_cloud": False,
             "is_bad_shadow": False,
             "is_bad_nodata": True,
             "is_too_dark": True,
+            "is_dark_and_low_contrast": True,
             "is_bad_quality": True,
-            "quality_flags": ["NO_DATA_OR_BLACK_PIXELS", "TOO_DARK_OR_LOW_CONTRAST"],
+            "quality_flags": ["NO_DATA_OR_BLACK_PIXELS", SENTINEL_DARK_LOW_CONTRAST_REASON],
         }
 
     cloud = np.isin(scl, list(SCL_CLOUD_CLASSES)) & valid
@@ -444,19 +464,34 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
     shadow_fraction = float(shadow.sum() / valid_count)
     brightness = (red + green + blue) / 3.0
     valid_brightness = brightness[valid & np.isfinite(brightness)]
+    clear_brightness = brightness[valid & ~cloud & ~shadow & np.isfinite(brightness)]
     dark_fraction = (
         float((valid_brightness < SENTINEL_DARK_BRIGHTNESS_THRESHOLD).sum() / valid_brightness.size)
         if valid_brightness.size
         else 1.0
     )
-    brightness_p50 = float(np.percentile(valid_brightness, 50)) if valid_brightness.size else 0.0
-    brightness_p95 = float(np.percentile(valid_brightness, 95)) if valid_brightness.size else 0.0
+    if clear_brightness.size:
+        brightness_p05, brightness_p50, brightness_p95 = (
+            float(value) for value in np.percentile(clear_brightness, [5, 50, 95])
+        )
+        brightness_range = brightness_p95 - brightness_p05
+        brightness_relative_contrast = brightness_range / brightness_p50 if brightness_p50 > 0 else 0.0
+    else:
+        brightness_p05 = 0.0
+        brightness_p50 = 0.0
+        brightness_p95 = 0.0
+        brightness_range = 0.0
+        brightness_relative_contrast = 0.0
     is_bad_cloud = cloud_fraction > SENTINEL_CLOUD_THRESHOLD
     is_bad_shadow = shadow_fraction > SENTINEL_SHADOW_THRESHOLD
     is_bad_nodata = nodata_fraction > SENTINEL_NODATA_THRESHOLD
-    is_too_dark = (
-        dark_fraction > SENTINEL_DARK_FRACTION_THRESHOLD
-        or brightness_p95 < SENTINEL_DARK_P95_THRESHOLD
+    is_dark_and_low_contrast = (
+        clear_brightness.size > 0
+        and brightness_p95 < SENTINEL_DARK_LOW_CONTRAST_P95_THRESHOLD
+        and (
+            brightness_range < SENTINEL_LOW_CONTRAST_RANGE_THRESHOLD
+            or brightness_relative_contrast < SENTINEL_LOW_CONTRAST_RELATIVE_THRESHOLD
+        )
     )
     quality_flags = []
     if is_bad_nodata:
@@ -465,36 +500,43 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
         quality_flags.append("CLOUDS")
     if is_bad_shadow:
         quality_flags.append("CLOUD_SHADOW")
-    if is_too_dark:
-        quality_flags.append("TOO_DARK_OR_LOW_CONTRAST")
+    if is_dark_and_low_contrast:
+        quality_flags.append(SENTINEL_DARK_LOW_CONTRAST_REASON)
     return {
         "cloud_fraction": round(cloud_fraction, 4),
         "shadow_fraction": round(shadow_fraction, 4),
         "nodata_fraction": round(nodata_fraction, 4),
         "dark_fraction": round(dark_fraction, 4),
+        "brightness_p05": round(brightness_p05, 2),
         "brightness_p50": round(brightness_p50, 2),
         "brightness_p95": round(brightness_p95, 2),
+        "brightness_p95_minus_p05": round(brightness_range, 2),
+        "brightness_relative_contrast": round(brightness_relative_contrast, 4),
         "is_bad_cloud": is_bad_cloud,
         "is_bad_shadow": is_bad_shadow,
         "is_bad_nodata": is_bad_nodata,
-        "is_too_dark": is_too_dark,
+        "is_too_dark": is_dark_and_low_contrast,
+        "is_dark_and_low_contrast": is_dark_and_low_contrast,
         "is_bad_quality": bool(quality_flags),
         "quality_flags": quality_flags,
     }
 
 
-def auto_review_reason(metrics: dict[str, Any]) -> str | None:
+def auto_review_reasons(metrics: dict[str, Any]) -> list[str]:
     flags = set(metrics.get("quality_flags") or [])
-    for reason in ("NO_DATA_OR_BLACK_PIXELS", "CLOUDS", "CLOUD_SHADOW", "TOO_DARK_OR_LOW_CONTRAST"):
-        if reason in flags:
-            return reason
-    return None
+    return [reason for reason in AUTO_REVIEW_REASON_PRIORITY if reason in flags]
+
+
+def auto_review_reason(metrics: dict[str, Any]) -> str | None:
+    reasons = auto_review_reasons(metrics)
+    return reasons[0] if reasons else None
 
 
 def apply_auto_scene_review(db: Session, download_id: str, metrics: dict[str, Any]) -> None:
-    reason_code = auto_review_reason(metrics)
-    if reason_code is None:
+    reason_codes = auto_review_reasons(metrics)
+    if not reason_codes:
         return
+    reason_code = reason_codes[0]
     existing = db.scalar(
         select(SentinelSceneReview).where(SentinelSceneReview.download_id == download_id)
     )
@@ -509,6 +551,14 @@ def apply_auto_scene_review(db: Session, download_id: str, metrics: dict[str, An
             notes=AUTO_REVIEW_NOTES,
         )
     )
+    for code in reason_codes:
+        db.add(
+            SentinelSceneReviewReason(
+                download_id=download_id,
+                reason_code=code,
+                reason_text=None,
+            )
+        )
 
 
 def download_sentinel_for_sample(
@@ -626,6 +676,11 @@ def download_sentinel_for_sample(
         "shadow_fraction": metrics["shadow_fraction"],
         "nodata_fraction": metrics["nodata_fraction"],
         "dark_fraction": metrics["dark_fraction"],
+        "brightness_p05": metrics["brightness_p05"],
+        "brightness_p50": metrics["brightness_p50"],
+        "brightness_p95": metrics["brightness_p95"],
+        "brightness_p95_minus_p05": metrics["brightness_p95_minus_p05"],
+        "brightness_relative_contrast": metrics["brightness_relative_contrast"],
         "is_bad_quality": metrics["is_bad_quality"],
         "quality_flags": metrics["quality_flags"],
         "is_bad_cloud": metrics["is_bad_cloud"],
@@ -633,11 +688,54 @@ def download_sentinel_for_sample(
     }
 
 
-def sentinel_review_payload(review: SentinelSceneReview | None) -> dict[str, Any]:
+def sentinel_review_reason_payloads(
+    db: Session,
+    download_id: str,
+    review: SentinelSceneReview | None = None,
+) -> list[dict[str, Any]]:
+    reasons = list(
+        db.scalars(
+            select(SentinelSceneReviewReason)
+            .where(SentinelSceneReviewReason.download_id == download_id)
+            .order_by(SentinelSceneReviewReason.id)
+        )
+    )
+    payloads = [
+        {
+            "reason_code": reason.reason_code,
+            "reason_text": reason.reason_text,
+        }
+        for reason in reasons
+    ]
+    if not payloads and review is not None and review.reason_code:
+        payloads.append(
+            {
+                "reason_code": review.reason_code,
+                "reason_text": review.reason_text,
+            }
+        )
+    return payloads
+
+
+def sentinel_review_payload(
+    review: SentinelSceneReview | None,
+    reason_payloads: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    reasons = reason_payloads or []
+    reason_codes = [str(reason["reason_code"]) for reason in reasons if reason.get("reason_code")]
+    primary_reason_code = reason_codes[0] if reason_codes else (review.reason_code if review is not None else None)
+    other_reason = next((reason for reason in reasons if reason.get("reason_code") == "OTHER"), None)
+    reason_text = (
+        other_reason.get("reason_text")
+        if other_reason is not None
+        else (review.reason_text if review is not None else None)
+    )
     return {
         "is_excluded": bool(review.is_excluded) if review is not None else False,
-        "reason_code": review.reason_code if review is not None else None,
-        "reason_text": review.reason_text if review is not None else None,
+        "reason_code": primary_reason_code,
+        "reason_codes": reason_codes,
+        "reasons": reasons,
+        "reason_text": reason_text,
         "notes": review.notes if review is not None else None,
         "created_at": review.created_at.isoformat() if review is not None and review.created_at else None,
         "updated_at": review.updated_at.isoformat() if review is not None and review.updated_at else None,
@@ -661,6 +759,7 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
     review = db.scalar(
         select(SentinelSceneReview).where(SentinelSceneReview.download_id == download.download_id)
     )
+    reason_payloads = sentinel_review_reason_payloads(db, download.download_id, review)
     metadata = json.loads(download.metadata_json)
     return {
         "download_id": download.download_id,
@@ -678,7 +777,7 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         "is_bad_cloud": download.is_bad_cloud,
         "is_bad_quality": download.is_bad_quality,
         "quality_flags": json_or_list(download.quality_flags_json),
-        "review": sentinel_review_payload(review),
+        "review": sentinel_review_payload(review, reason_payloads),
         "previews": [
             {
                 "view": preview.view,

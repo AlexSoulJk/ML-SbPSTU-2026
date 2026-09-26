@@ -211,6 +211,23 @@ class SentinelSceneReview(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
+class SentinelSceneReviewReason(Base):
+    __tablename__ = "forest_sentinel_scene_review_reasons"
+    __table_args__ = (
+        UniqueConstraint("download_id", "reason_code", name="uq_forest_sentinel_scene_review_reason"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    download_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sentinel_downloads.download_id"),
+        nullable=False,
+        index=True,
+    )
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason_text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class DerivedPreview(Base):
     __tablename__ = "forest_derived_previews"
 

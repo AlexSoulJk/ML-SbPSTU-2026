@@ -25,7 +25,7 @@ STAC_MAX_CLOUD = 30.0
 SEARCH_TOP_N_PER_PERIOD = 40
 MAX_ACCEPTED_PER_PERIOD = 10
 MIN_DAYS_BETWEEN_ACCEPTED = 7
-LOCAL_CLOUD_THRESHOLD = 0.30
+LOCAL_CLOUD_THRESHOLD = 0.10
 
 AUTO_EXCLUDE_CLOUDY = True
 CLOUD_REVIEW_REASON = "CLOUDS"
@@ -55,6 +55,7 @@ from backend.forest.models import (  # noqa: E402
     SampleStatus,
     SentinelDownload,
     SentinelSceneReview,
+    SentinelSceneReviewReason,
     SentinelSearch,
     utc_now,
 )
@@ -156,6 +157,39 @@ def review_for_download(db, download_id: str) -> SentinelSceneReview | None:
     )
 
 
+def review_reason_codes(db, download_id: str, review: SentinelSceneReview | None = None) -> list[str]:
+    codes = list(
+        db.scalars(
+            select(SentinelSceneReviewReason.reason_code)
+            .where(SentinelSceneReviewReason.download_id == download_id)
+            .order_by(SentinelSceneReviewReason.id)
+        )
+    )
+    if not codes and review is not None and review.reason_code:
+        codes.append(review.reason_code)
+    return codes
+
+
+def replace_review_reasons(db, download_id: str, reason_codes: list[str]) -> None:
+    existing = list(
+        db.scalars(
+            select(SentinelSceneReviewReason).where(SentinelSceneReviewReason.download_id == download_id)
+        )
+    )
+    for reason in existing:
+        db.delete(reason)
+    if existing:
+        db.flush()
+    for reason_code in reason_codes:
+        db.add(
+            SentinelSceneReviewReason(
+                download_id=download_id,
+                reason_code=reason_code,
+                reason_text=None,
+            )
+        )
+
+
 def is_excluded(db, download_id: str) -> bool:
     review = review_for_download(db, download_id)
     return bool(review and review.is_excluded)
@@ -167,7 +201,8 @@ def upsert_cloud_review(db, download: SentinelDownload, cloud_fraction: float | 
     if DRY_RUN:
         return "would_save_cloud_review"
     review = review_for_download(db, download.download_id)
-    if review is not None and review.is_excluded and review.reason_code and review.reason_code != CLOUD_REVIEW_REASON:
+    reason_codes = review_reason_codes(db, download.download_id, review)
+    if review is not None and review.is_excluded and reason_codes and CLOUD_REVIEW_REASON not in reason_codes:
         return "kept_existing_review"
     if review is None:
         review = SentinelSceneReview(download_id=download.download_id)
@@ -183,6 +218,7 @@ def upsert_cloud_review(db, download: SentinelDownload, cloud_fraction: float | 
         f"{percent:.1f}% > {threshold:.1f}%."
     )
     review.updated_at = utc_now()
+    replace_review_reasons(db, download.download_id, [CLOUD_REVIEW_REASON])
     db.commit()
     return "cloud_review_saved"
 
@@ -427,6 +463,22 @@ def process_period(db, sample: Sample, event_year: int, period: Any, rows: list[
                 cloud_fraction=cloud_fraction,
                 action="downloaded_auto_excluded_cloudy",
                 reason=review_action,
+            )
+            continue
+        if download is not None and is_excluded(db, download.download_id):
+            review = review_for_download(db, download.download_id)
+            reason_codes = review_reason_codes(db, download.download_id, review)
+            report_row(
+                rows,
+                sample=sample,
+                period=period.key,
+                event_year=event_year,
+                scene_id=scene_id,
+                scene_datetime=scene_datetime,
+                download_id=result_payload["download_id"],
+                cloud_fraction=cloud_fraction,
+                action="downloaded_auto_excluded_quality",
+                reason=",".join(reason_codes) if reason_codes else "excluded",
             )
             continue
 

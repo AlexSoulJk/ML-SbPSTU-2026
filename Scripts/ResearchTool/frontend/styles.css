@@ -1226,6 +1226,39 @@ textarea {
   min-width: 0;
 }
 
+.forestSentinelReasonTitle {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.forestSentinelReasonGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 10px;
+}
+
+.forestSentinelReasonOption {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.forestSentinelReasonOption input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #d45d3f;
+}
+
+.forestSentinelReasonOption span {
+  overflow-wrap: anywhere;
+}
+
 .forestSentinelReviewActions {
   display: flex;
   gap: 8px;

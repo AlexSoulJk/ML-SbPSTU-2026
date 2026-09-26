@@ -1,4 +1,4 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-22";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-23";
 import {
   analyzeHansen,
   cancelForestJob,
@@ -14,8 +14,8 @@ import {
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-22";
-import { forestState } from "./state.js?v=forest-iter2-22";
+} from "./samples.js?v=forest-iter2-23";
+import { forestState } from "./state.js?v=forest-iter2-23";
 
 function $(id) {
   return document.getElementById(id);
@@ -392,7 +392,8 @@ const SENTINEL_REVIEW_REASONS = [
   { value: "HAZE_OR_SMOKE", label: "Haze or smoke" },
   { value: "SNOW_OR_ICE", label: "Snow or ice" },
   { value: "SEASON_MISMATCH", label: "Season mismatch" },
-  { value: "TOO_DARK_OR_LOW_CONTRAST", label: "Too dark / low contrast" },
+  { value: "DARK_AND_LOW_CONTRAST", label: "Dark + low contrast" },
+  { value: "TOO_DARK_OR_LOW_CONTRAST", label: "Too dark / low contrast (legacy)" },
   { value: "NO_DATA_OR_BLACK_PIXELS", label: "No data / black pixels" },
   { value: "AOI_NOT_COVERED", label: "AOI not covered" },
   { value: "GEOREGISTRATION_SHIFT", label: "Georegistration shift" },
@@ -424,12 +425,53 @@ function sentinelReviewReasonLabel(reasonCode) {
   return SENTINEL_REVIEW_REASON_LABELS.get(reasonCode) || reasonCode || "No reason";
 }
 
+function uniqueSentinelReasonCodes(codes) {
+  const result = [];
+  (codes || []).forEach((code) => {
+    const cleaned = String(code || "").trim();
+    if (cleaned && !result.includes(cleaned)) result.push(cleaned);
+  });
+  return result;
+}
+
+function sentinelReviewReasonCodes(review) {
+  const codes = uniqueSentinelReasonCodes(review?.reason_codes);
+  if (codes.length) return codes;
+  return review?.reason_code ? [review.reason_code] : [];
+}
+
+function sentinelReviewReasonText(review, reasonCode) {
+  const reason = (review?.reasons || []).find((item) => item.reason_code === reasonCode);
+  return reason?.reason_text || (reasonCode === "OTHER" ? review?.reason_text : "");
+}
+
+function sentinelReviewReasonSummary(review) {
+  const reasonCodes = sentinelReviewReasonCodes(review);
+  if (!reasonCodes.length) return "Choose reasons before saving.";
+  return `Reasons: ${reasonCodes
+    .map((code) => {
+      const label = sentinelReviewReasonLabel(code);
+      const reasonText = sentinelReviewReasonText(review, code);
+      if (reasonText) return `${label} / ${reasonText}`;
+      return label;
+    })
+    .join(", ")}`;
+}
+
 function baseSentinelReview(download) {
-  return download.review || {
+  const review = download.review || {
     is_excluded: false,
     reason_code: null,
+    reason_codes: [],
+    reasons: [],
     reason_text: null,
     notes: null,
+  };
+  const reasonCodes = sentinelReviewReasonCodes(review);
+  return {
+    ...review,
+    reason_code: review.reason_code || reasonCodes[0] || null,
+    reason_codes: reasonCodes,
   };
 }
 
@@ -437,40 +479,44 @@ function effectiveSentinelReview(download) {
   return forestState.sentinelReviewDrafts.get(download.download_id) || baseSentinelReview(download);
 }
 
-function sentinelReviewReasonOptions(selectedReason) {
-  return [
-    `<option value="">Choose reason</option>`,
-    ...SENTINEL_REVIEW_REASONS.map(
-      (reason) => `
-        <option value="${escapeHtml(reason.value)}" ${reason.value === selectedReason ? "selected" : ""}>
-          ${escapeHtml(reason.label)}
-        </option>
-      `,
-    ),
-  ].join("");
+function sentinelReviewReasonChecks(selectedReasons, downloadId, saving) {
+  const selected = new Set(selectedReasons);
+  return `
+    <div class="forestSentinelReasonGrid">
+      ${SENTINEL_REVIEW_REASONS.map(
+        (reason) => `
+          <label class="forestSentinelReasonOption">
+            <input
+              class="forestSentinelReasonCheck"
+              type="checkbox"
+              data-download-id="${escapeHtml(downloadId)}"
+              data-reason-code="${escapeHtml(reason.value)}"
+              ${selected.has(reason.value) ? "checked" : ""}
+              ${saving ? "disabled" : ""}
+            />
+            <span>${escapeHtml(reason.label)}</span>
+          </label>
+        `,
+      ).join("")}
+    </div>
+  `;
 }
 
 function renderSentinelReviewPanel(download, review, options = {}) {
   if (!review.is_excluded) return "";
 
   const downloadId = download.download_id || "";
-  const reasonCode = review.reason_code || "";
+  const reasonCodes = sentinelReviewReasonCodes(review);
   const reasonText = review.reason_text || "";
   const saving = Boolean(options.saving);
   const hasDraft = forestState.sentinelReviewDrafts.has(downloadId);
-  const isOther = reasonCode === "OTHER";
-  const reasonSummary = reasonCode
-    ? `Reason: ${sentinelReviewReasonLabel(reasonCode)}${isOther && reasonText ? ` / ${reasonText}` : ""}`
-    : "Choose reason before saving.";
+  const isOther = reasonCodes.includes("OTHER");
+  const reasonSummary = sentinelReviewReasonSummary({ ...review, reason_codes: reasonCodes });
 
   return `
     <div class="forestSentinelReviewPanel">
-      <label>
-        Reason
-        <select class="forestSentinelReasonSelect" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>
-          ${sentinelReviewReasonOptions(reasonCode)}
-        </select>
-      </label>
+      <div class="forestSentinelReasonTitle">Reasons</div>
+      ${sentinelReviewReasonChecks(reasonCodes, downloadId, saving)}
       ${
         isOther
           ? `<label>
@@ -708,10 +754,7 @@ function compareDownloadMeta(download, preview) {
     parts.push(`cloud ${Math.round(Number(download.cloud_fraction) * 100)}%`);
   }
   if (download.review?.is_excluded) {
-    const reason = download.review.reason_code
-      ? sentinelReviewReasonLabel(download.review.reason_code)
-      : "no reason";
-    parts.push(`excluded: ${reason}`);
+    parts.push(`excluded: ${sentinelReviewReasonSummary(download.review).replace(/^Reasons: /, "")}`);
   }
   return parts.join(" / ");
 }
@@ -1255,9 +1298,9 @@ function bindSentinelDownloadControls() {
     checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", (event) => run(() => toggleSentinelReview(event)));
   });
-  document.querySelectorAll(".forestSentinelReasonSelect").forEach((select) => {
-    select.addEventListener("click", (event) => event.stopPropagation());
-    select.addEventListener("change", (event) => updateSentinelReviewReason(event));
+  document.querySelectorAll(".forestSentinelReasonCheck").forEach((checkbox) => {
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", (event) => updateSentinelReviewReason(event));
   });
   document.querySelectorAll(".forestSentinelOtherReasonInput").forEach((input) => {
     input.addEventListener("click", (event) => event.stopPropagation());
@@ -1478,12 +1521,21 @@ function findSentinelDownload(downloadId) {
 
 function sentinelReviewDraftFromDownload(download, patch = {}) {
   const current = forestState.sentinelReviewDrafts.get(download.download_id) || baseSentinelReview(download);
-  return {
+  const merged = {
     is_excluded: true,
+    reason_codes: sentinelReviewReasonCodes(current),
     reason_code: current.reason_code || "",
     reason_text: current.reason_text || "",
     notes: current.notes || null,
     ...patch,
+  };
+  const reasonCodes = uniqueSentinelReasonCodes(
+    merged.reason_codes?.length ? merged.reason_codes : (merged.reason_code ? [merged.reason_code] : []),
+  );
+  return {
+    ...merged,
+    reason_codes: reasonCodes,
+    reason_code: reasonCodes[0] || "",
   };
 }
 
@@ -1496,19 +1548,36 @@ function setSentinelReviewDraft(downloadId, patch = {}) {
 }
 
 function updateSentinelReviewReason(event) {
-  const select = event.target;
-  const reasonCode = select.value;
-  const draft = setSentinelReviewDraft(select.dataset.downloadId, {
-    reason_code: reasonCode,
-    reason_text: reasonCode === "OTHER" ? undefined : "",
+  const checkbox = event.target;
+  const downloadId = checkbox.dataset.downloadId;
+  const reasonCode = checkbox.dataset.reasonCode;
+  const download = findSentinelDownload(downloadId);
+  if (!download || !reasonCode) return;
+
+  const current = effectiveSentinelReview(download);
+  const reasonCodes = sentinelReviewReasonCodes(current);
+  const nextReasonCodes = checkbox.checked
+    ? uniqueSentinelReasonCodes([...reasonCodes, reasonCode])
+    : reasonCodes.filter((code) => code !== reasonCode);
+  const draft = setSentinelReviewDraft(downloadId, {
+    reason_codes: nextReasonCodes,
+    reason_code: nextReasonCodes[0] || "",
+    reason_text: nextReasonCodes.includes("OTHER") ? current.reason_text || "" : "",
   });
   renderSentinelDownloadsPanel();
-  setForestStatus(draft?.reason_code ? "Sentinel review reason selected" : "choose Sentinel review reason");
+  setForestStatus(draft?.reason_codes?.length ? "Sentinel review reasons selected" : "choose Sentinel review reasons");
 }
 
 function updateSentinelReviewOtherText(event) {
+  const download = findSentinelDownload(event.target.dataset.downloadId);
+  if (!download) return;
+  const reasonCodes = uniqueSentinelReasonCodes([
+    ...sentinelReviewReasonCodes(effectiveSentinelReview(download)),
+    "OTHER",
+  ]);
   setSentinelReviewDraft(event.target.dataset.downloadId, {
-    reason_code: "OTHER",
+    reason_codes: reasonCodes,
+    reason_code: reasonCodes[0] || "OTHER",
     reason_text: event.target.value,
   });
 }
@@ -1541,6 +1610,7 @@ async function restoreSentinelReview(downloadId) {
   try {
     await saveSentinelReview(downloadId, {
       is_excluded: false,
+      reason_codes: [],
       reason_code: null,
       reason_text: null,
       notes: null,
@@ -1588,14 +1658,14 @@ async function saveSentinelReviewDraft(downloadId) {
   const download = findSentinelDownload(downloadId);
   if (!download) return;
   const review = effectiveSentinelReview(download);
-  const reasonCode = String(review.reason_code || "").trim();
-  const reasonText = reasonCode === "OTHER" ? String(review.reason_text || "").trim() : null;
+  const reasonCodes = sentinelReviewReasonCodes(review);
+  const reasonText = reasonCodes.includes("OTHER") ? String(review.reason_text || "").trim() : null;
 
-  if (!reasonCode) {
-    setForestStatus("choose Sentinel exclusion reason");
+  if (!reasonCodes.length) {
+    setForestStatus("choose Sentinel exclusion reasons");
     return;
   }
-  if (reasonCode === "OTHER" && !reasonText) {
+  if (reasonCodes.includes("OTHER") && !reasonText) {
     setForestStatus("fill Other reason before saving");
     return;
   }
@@ -1609,7 +1679,8 @@ async function saveSentinelReviewDraft(downloadId) {
   try {
     await saveSentinelReview(downloadId, {
       is_excluded: true,
-      reason_code: reasonCode,
+      reason_codes: reasonCodes,
+      reason_code: reasonCodes[0] || null,
       reason_text: reasonText,
       notes: null,
     });
