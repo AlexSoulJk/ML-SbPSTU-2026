@@ -474,7 +474,8 @@ textarea {
   text-transform: uppercase;
 }
 
-.forestHansenLegend {
+.forestHansenLegend,
+.forestRasterLegend {
   display: grid;
   gap: 7px;
 }
@@ -498,12 +499,25 @@ textarea {
   gap: 4px;
   min-height: 22px;
   padding: 2px 5px;
+  appearance: none;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #fff;
   color: var(--muted);
+  cursor: pointer;
   font-size: 11px;
+  font-family: inherit;
   line-height: 1;
+}
+
+.forestHansenLegendItem:hover {
+  border-color: #8fa19c;
+  color: var(--ink);
+}
+
+.forestHansenLegendItem.muted {
+  background: #f0f2ee;
+  color: #8a928d;
 }
 
 .forestHansenLegendItem i {
@@ -512,6 +526,11 @@ textarea {
   height: 12px;
   border: 1px solid rgba(31, 42, 43, 0.18);
   border-radius: 3px;
+}
+
+.forestHansenLegendItem.muted i {
+  filter: grayscale(1);
+  opacity: 0.35;
 }
 
 .drawer {

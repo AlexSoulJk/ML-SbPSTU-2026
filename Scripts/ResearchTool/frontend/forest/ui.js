@@ -1,4 +1,4 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-23";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-24";
 import {
   analyzeHansen,
   cancelForestJob,
@@ -14,8 +14,8 @@ import {
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-23";
-import { forestState } from "./state.js?v=forest-iter2-23";
+} from "./samples.js?v=forest-iter2-24";
+import { forestState } from "./state.js?v=forest-iter2-24";
 
 function $(id) {
   return document.getElementById(id);
@@ -111,6 +111,141 @@ function statusLabel(status) {
   return status === "TOO_OLD" ? "Too old" : status;
 }
 
+const SCL_LEGEND_ITEMS = [
+  { code: 0, label: "No data", color: "#000000" },
+  { code: 1, label: "Saturated", color: "#b40000" },
+  { code: 2, label: "Dark area", color: "#5a5a5a" },
+  { code: 3, label: "Cloud shadow", color: "#60361c" },
+  { code: 4, label: "Vegetation", color: "#288c43" },
+  { code: 5, label: "Bare soil", color: "#dcc462" },
+  { code: 6, label: "Water", color: "#326ebe" },
+  { code: 7, label: "Unclassified", color: "#a0a0a0" },
+  { code: 8, label: "Cloud medium", color: "#e1e1e1" },
+  { code: 9, label: "Cloud high", color: "#ffffff" },
+  { code: 10, label: "Thin cirrus", color: "#aad2ff" },
+  { code: 11, label: "Snow / ice", color: "#d2f5ff" },
+];
+
+function hexToRgb(hex) {
+  const value = String(hex || "").replace("#", "");
+  if (value.length !== 6) return null;
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  if ([red, green, blue].some((channel) => Number.isNaN(channel))) return null;
+  return [red, green, blue];
+}
+
+function rgbKey(red, green, blue) {
+  return `${red},${green},${blue}`;
+}
+
+function colorKey(color) {
+  const rgb = hexToRgb(color);
+  return rgb ? rgbKey(...rgb) : "";
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Could not load image: ${url}`));
+    image.src = url;
+  });
+}
+
+function drawImageToCanvas(image) {
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.imageSmoothingEnabled = false;
+  context.drawImage(image, 0, 0, width, height);
+  return { canvas, context, width, height };
+}
+
+async function presentColorsForImage(url) {
+  const image = await loadImage(url);
+  const { context, width, height } = drawImageToCanvas(image);
+  const data = context.getImageData(0, 0, width, height).data;
+  const colors = new Set();
+  for (let index = 0; index < data.length; index += 4) {
+    if (data[index + 3] > 0) {
+      colors.add(rgbKey(data[index], data[index + 1], data[index + 2]));
+    }
+  }
+  return colors;
+}
+
+async function sclLegendForPreview(preview) {
+  if (!preview?.url || preview.view !== "scl") return [];
+  if (forestState.sclLegendCache.has(preview.url)) {
+    return forestState.sclLegendCache.get(preview.url);
+  }
+  if (forestState.sclLegendPending.has(preview.url)) {
+    return forestState.sclLegendPending.get(preview.url);
+  }
+
+  const promise = presentColorsForImage(preview.url)
+    .then((colors) => SCL_LEGEND_ITEMS
+      .filter((item) => colors.has(colorKey(item.color)))
+      .map((item) => ({ ...item, key: String(item.code) })))
+    .catch((error) => {
+      console.warn("[forest-ui] SCL legend detection failed", error);
+      return [];
+    })
+    .finally(() => forestState.sclLegendPending.delete(preview.url));
+  forestState.sclLegendPending.set(preview.url, promise);
+  const legend = await promise;
+  forestState.sclLegendCache.set(preview.url, legend);
+  return legend;
+}
+
+function mergeLegendItems(groups, keyField) {
+  const byKey = new Map();
+  groups.flat().forEach((item) => {
+    const key = String(item[keyField]);
+    if (!byKey.has(key)) byKey.set(key, item);
+  });
+  return [...byKey.values()].sort((left, right) => Number(left[keyField]) - Number(right[keyField]));
+}
+
+function visibleLegendItems(legend, hiddenKeys, keyField) {
+  return legend.filter((item) => !hiddenKeys.has(String(item[keyField])));
+}
+
+async function filteredRasterUrl(sourceUrl, legend, hiddenKeys, keyField) {
+  if (!sourceUrl || !legend?.length) return sourceUrl;
+  const activeHidden = legend
+    .map((item) => String(item[keyField]))
+    .filter((key) => hiddenKeys.has(key))
+    .sort();
+  if (!activeHidden.length) return sourceUrl;
+
+  const visibleColors = new Set(visibleLegendItems(legend, hiddenKeys, keyField).map((item) => colorKey(item.color)));
+  const cacheKey = `${sourceUrl}::${keyField}::${activeHidden.join(",")}`;
+  if (forestState.rasterFilterCache.has(cacheKey)) {
+    return forestState.rasterFilterCache.get(cacheKey);
+  }
+
+  const image = await loadImage(sourceUrl);
+  const { canvas, context, width, height } = drawImageToCanvas(image);
+  const imageData = context.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  for (let index = 0; index < data.length; index += 4) {
+    if (data[index + 3] === 0) continue;
+    if (!visibleColors.has(rgbKey(data[index], data[index + 1], data[index + 2]))) {
+      data[index + 3] = 0;
+    }
+  }
+  context.putImageData(imageData, 0, 0);
+  const filteredUrl = canvas.toDataURL("image/png");
+  forestState.rasterFilterCache.set(cacheKey, filteredUrl);
+  return filteredUrl;
+}
+
 function currentHansenOverlay(detail = forestState.selectedDetail) {
   const masks = detail?.hansen?.masks || [];
   const layer = forestState.hansenLayer || "dominant_year";
@@ -136,27 +271,140 @@ function renderHansenLegend(hostId = "forestHansenLegend", detail = forestState.
   const overlay = currentHansenOverlay(detail);
   const legend = overlay?.legend || [];
   if (forestState.hansenLayer !== "all_loss") {
+    host.hidden = false;
     host.innerHTML = `<div class="meta">Legend is shown for all loss.</div>`;
     return;
   }
   if (!legend.length) {
+    host.hidden = false;
     host.innerHTML = `<div class="meta">No Hansen loss years in current view.</div>`;
     return;
   }
 
+  host.hidden = false;
   host.innerHTML = `
     <div class="forestHansenLegendTitle">Loss year</div>
     <div class="forestHansenLegendItems">
       ${legend
-        .map((item) => `
-          <span class="forestHansenLegendItem">
+        .map((item) => {
+          const key = String(item.year);
+          const hidden = forestState.hansenLossHiddenYears.has(key);
+          return `
+          <button class="forestHansenLegendItem ${hidden ? "muted" : ""}" type="button" data-hansen-loss-year="${escapeHtml(key)}" title="${hidden ? "Show" : "Hide"} ${escapeHtml(item.year)}">
             <i style="background:${escapeHtml(item.color)}"></i>
             <span>${escapeHtml(item.year)}</span>
-          </span>
-        `)
+          </button>
+        `;
+        })
         .join("")}
     </div>
   `;
+
+  host.querySelectorAll("[data-hansen-loss-year]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.hansenLossYear;
+      if (forestState.hansenLossHiddenYears.has(key)) {
+        forestState.hansenLossHiddenYears.delete(key);
+      } else {
+        forestState.hansenLossHiddenYears.add(key);
+      }
+      renderRasterLegends();
+      renderMap();
+      if (forestState.compareOpen) renderCompareView();
+    });
+  });
+}
+
+function renderSclLegendItems(host, legend) {
+  if (!legend.length) {
+    host.hidden = false;
+    host.innerHTML = `<div class="meta">No SCL classes in current image.</div>`;
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = `
+    <div class="forestHansenLegendTitle">SCL classes</div>
+    <div class="forestHansenLegendItems">
+      ${legend
+        .map((item) => {
+          const key = String(item.code);
+          const hidden = forestState.sclHiddenClasses.has(key);
+          return `
+            <button class="forestHansenLegendItem ${hidden ? "muted" : ""}" type="button" data-scl-class="${escapeHtml(key)}" title="${hidden ? "Show" : "Hide"} ${escapeHtml(item.label)}">
+              <i style="background:${escapeHtml(item.color)}"></i>
+              <span>${escapeHtml(item.code)} ${escapeHtml(item.label)}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+  host.querySelectorAll("[data-scl-class]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.sclClass;
+      if (forestState.sclHiddenClasses.has(key)) {
+        forestState.sclHiddenClasses.delete(key);
+      } else {
+        forestState.sclHiddenClasses.add(key);
+      }
+      renderRasterLegends();
+      renderMap();
+      if (forestState.compareOpen) renderCompareView();
+    });
+  });
+}
+
+function sclPreviewSignature(previews) {
+  return previews
+    .filter((preview) => preview?.view === "scl" && preview.url)
+    .map((preview) => preview.url)
+    .sort()
+    .join("|");
+}
+
+function currentSclLegendPreviews(hostId) {
+  if (hostId === "forestCompareSclLegend") {
+    return forestState.compareSclPreviews;
+  }
+  return forestState.activeSentinelPreview ? [forestState.activeSentinelPreview] : [];
+}
+
+function renderSclLegend(hostId = "forestSclLegend", previews = []) {
+  const host = $(hostId);
+  if (!host) return;
+  const sclPreviews = previews.filter((preview) => preview?.view === "scl" && preview.url);
+  if (!sclPreviews.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+
+  const ready = sclPreviews.every((preview) => forestState.sclLegendCache.has(preview.url));
+  if (!ready) {
+    host.hidden = false;
+    host.innerHTML = `<div class="meta">Loading SCL legend...</div>`;
+    const expectedSignature = sclPreviewSignature(sclPreviews);
+    Promise.all(sclPreviews.map((preview) => sclLegendForPreview(preview))).then(() => {
+      const currentPreviews = currentSclLegendPreviews(hostId);
+      if (sclPreviewSignature(currentPreviews) !== expectedSignature) return;
+      renderSclLegend(hostId, currentPreviews);
+      applyVisibleRasterFilters();
+    });
+    return;
+  }
+
+  const legend = mergeLegendItems(
+    sclPreviews.map((preview) => forestState.sclLegendCache.get(preview.url) || []),
+    "code",
+  );
+  renderSclLegendItems(host, legend);
+}
+
+function renderRasterLegends() {
+  renderHansenLegend();
+  renderSclLegend("forestSclLegend", forestState.activeSentinelPreview ? [forestState.activeSentinelPreview] : []);
+  renderHansenLegend("forestCompareHansenLegend", forestState.selectedDetail);
+  renderSclLegend("forestCompareSclLegend", forestState.compareSclPreviews);
 }
 
 function renderLayerPanelState() {
@@ -169,7 +417,7 @@ function renderLayerPanelState() {
   closeButton.hidden = forestState.layerPanelCollapsed;
   openButton.setAttribute("aria-expanded", "false");
   closeButton.setAttribute("aria-expanded", "true");
-  renderHansenLegend();
+  renderRasterLegends();
 }
 
 function setLayerPanelCollapsed(collapsed) {
@@ -188,7 +436,7 @@ function renderCompareLayerPanelState() {
   closeButton.hidden = forestState.compareLayerPanelCollapsed;
   openButton.setAttribute("aria-expanded", "false");
   closeButton.setAttribute("aria-expanded", "true");
-  renderHansenLegend("forestCompareHansenLegend", forestState.selectedDetail);
+  renderRasterLegends();
 }
 
 function setCompareLayerPanelCollapsed(collapsed) {
@@ -819,6 +1067,83 @@ function removeCompareLayer(name) {
   forestState.compareLayers[name] = null;
 }
 
+function isFilterableHansenOverlay(overlay) {
+  return forestState.hansenLayer === "all_loss"
+    && ["all_loss", "aoi_all_loss"].includes(overlay?.mask_type)
+    && overlay?.png_url
+    && (overlay.legend || []).length;
+}
+
+async function filteredHansenOverlayUrl(overlay) {
+  if (!isFilterableHansenOverlay(overlay)) return overlay?.png_url || null;
+  return filteredRasterUrl(overlay.png_url, overlay.legend || [], forestState.hansenLossHiddenYears, "year");
+}
+
+async function filteredSclPreviewUrl(preview) {
+  if (preview?.view !== "scl" || !preview?.url) return preview?.url || null;
+  const legend = await sclLegendForPreview(preview);
+  return filteredRasterUrl(preview.url, legend, forestState.sclHiddenClasses, "code");
+}
+
+function applyMainRasterFilters() {
+  const sentinelLayer = forestState.layers.sentinel;
+  const sentinelPreview = forestState.activeSentinelPreview;
+  if (sentinelLayer && sentinelPreview?.view === "scl") {
+    const layerRef = sentinelLayer;
+    filteredSclPreviewUrl(sentinelPreview).then((url) => {
+      if (url && forestState.layers.sentinel === layerRef) {
+        layerRef.setUrl(url);
+      }
+    });
+  }
+
+  const hansenLayer = forestState.layers.hansen;
+  const overlay = currentHansenOverlay();
+  if (hansenLayer && isFilterableHansenOverlay(overlay)) {
+    const layerRef = hansenLayer;
+    filteredHansenOverlayUrl(overlay).then((url) => {
+      if (url && forestState.layers.hansen === layerRef) {
+        layerRef.setUrl(url);
+      }
+    });
+  }
+}
+
+function applyCompareImageFilter(kind, preview) {
+  const layerName = `${kind}Image`;
+  const layer = forestState.compareLayers[layerName];
+  if (!layer || preview?.view !== "scl") return;
+  filteredSclPreviewUrl(preview).then((url) => {
+    if (url && forestState.compareLayers[layerName] === layer) {
+      layer.setUrl(url);
+    }
+  });
+}
+
+function applyCompareHansenFilter(kind, overlay) {
+  const layerName = `${kind}Hansen`;
+  const layer = forestState.compareLayers[layerName];
+  if (!layer || !isFilterableHansenOverlay(overlay)) return;
+  filteredHansenOverlayUrl(overlay).then((url) => {
+    if (url && forestState.compareLayers[layerName] === layer) {
+      layer.setUrl(url);
+    }
+  });
+}
+
+function applyVisibleRasterFilters() {
+  applyMainRasterFilters();
+  if (!forestState.compareOpen) return;
+  const sample = forestState.selectedDetail;
+  const pre = compareDownloadById(sample, forestState.comparePreDownloadId);
+  const post = compareDownloadById(sample, forestState.comparePostDownloadId);
+  const overlay = currentHansenOverlay(sample);
+  applyCompareImageFilter("pre", previewForView(pre, forestState.compareView));
+  applyCompareImageFilter("post", previewForView(post, forestState.compareView));
+  applyCompareHansenFilter("pre", overlay);
+  applyCompareHansenFilter("post", overlay);
+}
+
 function renderCompareMap(kind, download, preview, hansenOverlay) {
   const map = ensureCompareMap(kind);
   removeCompareLayer(`${kind}Image`);
@@ -845,6 +1170,9 @@ function renderCompareMap(kind, download, preview, hansenOverlay) {
     ).addTo(map);
   }
 
+  applyCompareImageFilter(kind, preview);
+  applyCompareHansenFilter(kind, hansenOverlay);
+
   if (preview?.bbox) {
     map.fitBounds(bboxToBounds(preview.bbox), { padding: [20, 20], animate: false });
   } else if (hansenOverlay?.bbox) {
@@ -863,6 +1191,9 @@ function renderCompareView() {
   const prePreview = previewForView(pre, forestState.compareView);
   const postPreview = previewForView(post, forestState.compareView);
   const hansenOverlay = compareHansenOverlay(sample);
+  forestState.compareSclPreviews = forestState.compareView === "scl"
+    ? [prePreview, postPreview].filter(Boolean)
+    : [];
 
   $("forestCompareLayerSelect").innerHTML = compareViewOptions(sample);
   $("forestComparePreSelect").innerHTML = compareDownloadOptions(compareDownloads(sample, "PRE"), pre?.download_id);
@@ -901,6 +1232,7 @@ function openCompareView() {
 
 function closeCompareView(options = {}) {
   forestState.compareOpen = false;
+  forestState.compareSclPreviews = [];
   const compare = $("forestCompareView");
   if (compare) compare.hidden = true;
   if (!options.silent) setForestStatus("PRE/POST compare closed");
@@ -1337,7 +1669,8 @@ function renderMap(fit = false) {
     onSelect: (sampleId) => run(() => selectSample(sampleId)),
     fit,
   });
-  renderHansenLegend();
+  renderRasterLegends();
+  applyVisibleRasterFilters();
 }
 
 function clearSelectedSample() {
