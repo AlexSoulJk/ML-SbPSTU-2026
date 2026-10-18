@@ -24,26 +24,33 @@ from backend.config import FOREST_FEATURES_DIR, FOREST_MODELS_DIR
 DATASET = FOREST_FEATURES_DIR / "training_features_valid.parquet"
 
 FEATURE_COLS = [
-    # # Hansen
-    # "hansen_loss_fraction",
-    # "hansen_recent_loss_5y",
-    # "hansen_dominant_share",
-    #
-    "nbr_median_pre", "ndvi_median_pre", "ndmi_median_pre",
-    "scl_4_frac_pre", "scl_5_frac_pre",
-    # # Спектральные абсолютные уровни PRE / POST
-    # "ndvi_median_pre", "ndvi_median_post",
-    # "nbr_median_pre",  "nbr_median_post",
-    # "ndmi_median_pre", "ndmi_median_post",
-    #
-    # # Изменения PRE -> POST
-    # "ndvi_median_delta", "ndvi_median_rel",
-    # "nbr_median_delta",  "nbr_median_rel",
-    # "ndmi_median_delta", "ndmi_median_rel",
-    #
-    # # SCL доли
-    # "scl_4_frac_pre", "scl_4_frac_post",
-    # "scl_5_frac_pre", "scl_5_frac_post",
+    # Hansen
+    "hansen_loss_fraction",
+    "hansen_recent_loss_5y",
+    "hansen_dominant_share",
+
+    # Спектральные абсолютные уровни
+    "ndvi_median_pre", "ndvi_median_post",
+    "nbr_median_pre",  "nbr_median_post",
+    "ndmi_median_pre", "ndmi_median_post",
+
+    # Изменения PRE -> POST
+    "ndvi_median_delta", "ndvi_median_rel",
+    "nbr_median_delta",  "nbr_median_rel",
+    "ndmi_median_delta", "ndmi_median_rel",
+
+    # SCL доли
+    "scl_4_frac_pre", "scl_4_frac_post",
+    "scl_5_frac_pre", "scl_5_frac_post",
+
+    # Форма маски потери леса
+    "loss_n_components",
+    "loss_largest_share",
+    "loss_mean_area_ha",
+    "loss_compactness",
+    "loss_rectangularity",
+    "loss_perimeter_area_ratio",
+    "loss_edge_density",
 ]
 
 MIN_CLASS_SIZE = 20

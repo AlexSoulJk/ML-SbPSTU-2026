@@ -14,7 +14,7 @@ for _p in _here.parents:
 import numpy as np
 import pandas as pd
 import rasterio
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 
 from backend.config import FOREST_FEATURES_DIR
 from backend.forest.database import SessionLocal, init_forest_database
@@ -210,6 +210,62 @@ def collect_spectral(db, valid_ids: set[str]) -> pd.DataFrame:
 
     return df
 
+def collect_hansen_shape(db, valid_ids: set[str]) -> pd.DataFrame:
+    """Читает маску потери леса для каждого sample и считает форму пятен.
+
+    Использует по одной (последней) записи HansenAnalysis на sample_id —
+    ровно ту же, что и collect_hansen, чтобы не было дублей при merge.
+    """
+    from backend.forest.ml.hansen_shape_features import loss_shape_features
+    from backend.forest.models import HansenMask
+
+    # Приоритет типов масок
+    PREFERRED_MASK_TYPES = ("dominant_year", "aoi_dominant_year", "all_loss", "aoi_all_loss")
+
+    # Одна (последняя по created_at) запись HansenAnalysis на sample_id
+    latest: dict[str, HansenAnalysis] = {}
+    for a in db.scalars(select(HansenAnalysis).order_by(HansenAnalysis.created_at)):
+        if a.sample_id in valid_ids:
+            latest[a.sample_id] = a
+
+    rows = []
+    n_missing_mask = 0
+    n_missing_year = 0
+    n_empty_mask = 0
+
+    for sid, a in latest.items():
+        if not a.event_year:
+            n_missing_year += 1
+            continue
+
+        mask_row = None
+        for mask_type in PREFERRED_MASK_TYPES:
+            mask_row = db.scalar(
+                select(HansenMask).where(
+                    HansenMask.sample_id == sid,
+                    HansenMask.mask_type == mask_type,
+                )
+            )
+            if mask_row is not None:
+                break
+
+        if mask_row is None:
+            n_missing_mask += 1
+            continue
+
+        path = resolve_storage_path(mask_row.local_path)
+        feats = loss_shape_features(path, event_year=a.event_year, pixel_size_m=30.0)
+        if feats:
+            feats["sample_id"] = sid
+            rows.append(feats)
+        else:
+            n_empty_mask += 1
+
+    print(f"  Без маски: {n_missing_mask}, без event_year: {n_missing_year}, пустая маска: {n_empty_mask}")
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
 
 def main() -> None:
     init_forest_database()
@@ -228,8 +284,14 @@ def main() -> None:
         spectral = collect_spectral(db, valid_ids)
         print(f"Spectral rows: {len(spectral)}, cols: {len(spectral.columns) - 1}")
 
+        shape = collect_hansen_shape(db, valid_ids)
+        print(f"Shape rows:    {len(shape)}, cols: {len(shape.columns) - 1}")
+
     df = hansen.merge(spectral, on="sample_id", how="left")
-    print(f"Merged: {len(df)} rows, {len(df.columns)} cols")
+    if shape.empty:
+        print("[!] Shape пустая — пропускаю merge, тренировка пойдёт без признаков формы")
+    else:
+        df = df.merge(shape, on="sample_id", how="left")
 
     # Покрытие спектральных колонок
     spec_cols = [
