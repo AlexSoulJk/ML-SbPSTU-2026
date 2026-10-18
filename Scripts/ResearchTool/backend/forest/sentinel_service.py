@@ -27,6 +27,8 @@ from .geometry import sample_geometries
 from .models import (
     DerivedPreview,
     Sample,
+    SampleEvent,
+    SampleEventDownload,
     SentinelDownload,
     SentinelSceneReview,
     SentinelSceneReviewReason,
@@ -36,8 +38,10 @@ from .storage_paths import forest_cache_url, resolve_storage_path, to_storage_pa
 
 
 SEASON_PRESETS = {
+    "spring": ("04-15", "05-31"),
     "early_summer": ("06-01", "07-15"),
     "late_summer": ("08-01", "09-15"),
+    "autumn": ("09-16", "10-31"),
     "full_snow_free": ("06-01", "09-15"),
 }
 S2_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12", "SCL", "dataMask"]
@@ -123,6 +127,7 @@ def search_sentinel_for_sample(
     sample: Sample,
     *,
     event_year: int,
+    event_id: str | None = None,
     season_preset: str = "full_snow_free",
     max_cloud: float = 30.0,
     top_n: int = 10,
@@ -147,6 +152,7 @@ def search_sentinel_for_sample(
             SentinelSearch(
                 search_id=search_id,
                 sample_id=sample.sample_id,
+                event_id=event_id,
                 period=period.key,
                 event_year=event_year,
                 query_json=json.dumps(result.get("request"), ensure_ascii=False, sort_keys=True),
@@ -170,6 +176,7 @@ def search_sentinel_for_sample(
     db.commit()
     return {
         "sample_id": sample.sample_id,
+        "event_id": event_id,
         "event_year": event_year,
         "season_preset": season_preset,
         "max_cloud": max_cloud,
@@ -853,6 +860,21 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         select(SentinelSceneReview).where(SentinelSceneReview.download_id == download.download_id)
     )
     reason_payloads = sentinel_review_reason_payloads(db, download.download_id, review)
+    links = list(
+        db.scalars(
+            select(SampleEventDownload)
+            .where(SampleEventDownload.download_id == download.download_id)
+            .order_by(SampleEventDownload.period, SampleEventDownload.event_id)
+        )
+    )
+    events = {
+        event.event_id: event
+        for event in db.scalars(
+            select(SampleEvent).where(
+                SampleEvent.event_id.in_([link.event_id for link in links])
+            )
+        )
+    } if links else {}
     metadata = json.loads(download.metadata_json)
     download_cache_exists = resolve_storage_path(download.local_path).exists()
     return {
@@ -873,6 +895,17 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         "is_bad_quality": download.is_bad_quality,
         "quality_flags": json_or_list(download.quality_flags_json),
         "review": sentinel_review_payload(review, reason_payloads),
+        "event_links": [
+            {
+                "event_id": link.event_id,
+                "event_year": events[link.event_id].event_year if link.event_id in events else None,
+                "source": events[link.event_id].source if link.event_id in events else None,
+                "is_dominant": bool(events[link.event_id].is_dominant) if link.event_id in events else False,
+                "period": link.period,
+                "rank": link.rank,
+            }
+            for link in links
+        ],
         "previews": [
             {
                 "view": preview.view,

@@ -1,4 +1,4 @@
-import { api } from "./api.js?v=forest-db-sync-7";
+import { api } from "./api.js?v=forest-data-ops-1";
 
 function cleanFilters(filters) {
   return Object.fromEntries(
@@ -132,5 +132,81 @@ export async function startSentinelCacheDownload(downloadIds, options = {}) {
       download_ids: downloadIds,
       max_cloud: Number(options.max_cloud ?? 30),
     },
+  });
+}
+
+export async function planEventBackfill(limit = null) {
+  return api("/api/forest/data-operations/events/backfill/plan", {
+    method: "POST",
+    body: { limit },
+  });
+}
+
+export async function startEventBackfill(limit = null) {
+  return api("/api/forest/data-operations/events/backfill/jobs", {
+    method: "POST",
+    body: { limit },
+  });
+}
+
+export async function planSentinelBatch(payload) {
+  return api("/api/forest/data-operations/sentinel-download/plan", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function startSentinelBatch(payload) {
+  return api("/api/forest/data-operations/sentinel-download/jobs", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function startMissingGeotiffInventory() {
+  return api("/api/forest/data-operations/missing-geotiffs/jobs", {
+    method: "POST",
+    body: {},
+  });
+}
+
+export async function uploadMissingGeotiffInventory(file) {
+  const form = new FormData();
+  form.append("file", file);
+  return api("/api/forest/data-operations/inventory/upload", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function planSentinelBundle(payload) {
+  return api("/api/forest/data-operations/bundles/plan", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function startSentinelBundle(payload) {
+  return api("/api/forest/data-operations/bundles/jobs", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function listBundleImportCandidates() {
+  return api("/api/forest/data-operations/bundle-import/candidates");
+}
+
+export async function planBundleImport(payload) {
+  return api("/api/forest/data-operations/bundle-import/plan", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function startBundleImport(payload) {
+  return api("/api/forest/data-operations/bundle-import/jobs", {
+    method: "POST",
+    body: payload,
   });
 }

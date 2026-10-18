@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import FOREST_HANSEN_CACHE_DIR
+from .event_service import sync_hansen_events
 from .geometry import DEFAULT_SAMPLE_PLOT_M, sample_geometries
 from .hansen_provider import HANSEN_VERSION, download_hansen_tile, tile_id_for_lonlat, tile_model
 from .models import HansenAnalysis, HansenMask, HansenTile, Sample, SampleStatus, utc_now
@@ -348,6 +349,7 @@ def analyze_sample_hansen(
         if existing is not None:
             histogram = json.loads(existing.histogram_json)
             apply_sample_multiple_event_flag(sample, histogram)
+            sync_hansen_events(db, sample, existing)
             db.commit()
             report(
                 progress,
@@ -494,6 +496,7 @@ def analyze_sample_hansen(
             )
         )
 
+    event_sync = sync_hansen_events(db, sample, analysis)
     metrics = {
         "event_year": event_year,
         "total_loss_area_ha": total_loss_area_ha,
@@ -503,6 +506,7 @@ def analyze_sample_hansen(
         "include_treecover": include_treecover,
         "too_old_cutoff_year": TOO_OLD_EVENT_YEAR_CUTOFF,
         **apply_sample_multiple_event_flag(sample, histogram),
+        "event_sync": event_sync,
     }
     upsert_hansen_status(db, sample.sample_id, status, metrics)
     db.commit()

@@ -128,6 +128,32 @@ class HansenAnalysis(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class SampleEvent(Base):
+    __tablename__ = "forest_sample_events"
+    __table_args__ = (
+        UniqueConstraint("sample_id", "source", "event_year", name="uq_forest_sample_event"),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    sample_id: Mapped[str] = mapped_column(ForeignKey("forest_samples.sample_id"), index=True)
+    event_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_analysis_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_hansen_analyses.analysis_id"),
+        index=True,
+    )
+    loss_area_ha: Mapped[float | None] = mapped_column(Float)
+    loss_share: Mapped[float | None] = mapped_column(Float)
+    is_dominant: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class HansenTile(Base):
     __tablename__ = "forest_hansen_tiles"
     __table_args__ = (
@@ -162,6 +188,7 @@ class SentinelSearch(Base):
 
     search_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     sample_id: Mapped[str] = mapped_column(ForeignKey("forest_samples.sample_id"), index=True)
+    event_id: Mapped[str | None] = mapped_column(ForeignKey("forest_sample_events.event_id"), index=True)
     period: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     event_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     query_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -188,6 +215,33 @@ class SentinelDownload(Base):
     is_bad_quality: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     quality_flags_json: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SampleEventDownload(Base):
+    __tablename__ = "forest_sample_event_downloads"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id",
+            "download_id",
+            "period",
+            name="uq_forest_sample_event_download",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sample_events.event_id"),
+        nullable=False,
+        index=True,
+    )
+    download_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sentinel_downloads.download_id"),
+        nullable=False,
+        index=True,
+    )
+    period: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    rank: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

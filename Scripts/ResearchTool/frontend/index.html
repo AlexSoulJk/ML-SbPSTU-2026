@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=forest-db-sync-7" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=forest-event-fix-1" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -323,6 +323,188 @@
             </section>
           </div>
         </section>
+        <section id="forestDataOperationsView" class="forestDataOperationsView forestOnly" hidden>
+          <header class="forestDataOperationsHeader">
+            <div class="forestCompareTitleBlock">
+              <h2>Data Operations</h2>
+              <div id="forestDataOperationsStatus" class="meta">ready</div>
+            </div>
+            <button id="forestDataOperationsCloseBtn" type="button">Close</button>
+          </header>
+          <nav class="forestDataOperationsTabs" aria-label="Data operations">
+            <button type="button" data-data-operations-tab="download" class="active">Download Sentinel</button>
+            <button type="button" data-data-operations-tab="export">Export Bundle</button>
+            <button type="button" data-data-operations-tab="import">Import Bundle</button>
+          </nav>
+          <div class="forestDataOperationsPanels">
+            <section class="forestDataOperationsPanel" data-data-operations-panel="download">
+              <aside class="forestDataOperationsSetup">
+                <h3>Setup</h3>
+                <label>
+                  Mode
+                  <select id="forestDataOperationsDownloadMode">
+                    <option value="empty_samples">Empty samples</option>
+                    <option value="multi_event_enrichment">Multi-event enrichment</option>
+                  </select>
+                </label>
+                <label>
+                  Manual validation
+                  <select id="forestDataOperationsManualValidation">
+                    <option value="current">Current Forest filter</option>
+                    <option value="unvalidated">Not manually validated</option>
+                    <option value="any">Any</option>
+                  </select>
+                </label>
+                <div class="forestDataOperationsGrid2">
+                  <label>
+                    Samples
+                    <input id="forestDataOperationsSampleLimit" type="number" min="1" max="1000" value="100" />
+                  </label>
+                  <label>
+                    Valid target
+                    <input id="forestDataOperationsValidTarget" type="number" min="1" max="50" value="10" />
+                  </label>
+                  <label>
+                    QC cap
+                    <input id="forestDataOperationsQcCap" type="number" min="1" max="100" value="50" />
+                  </label>
+                  <label>
+                    Min days
+                    <input id="forestDataOperationsMinDays" type="number" min="0" max="365" value="7" />
+                  </label>
+                  <label>
+                    STAC cloud %
+                    <input id="forestDataOperationsStacCloud" type="number" min="0" max="100" value="30" />
+                  </label>
+                  <label>
+                    Local cloud %
+                    <input id="forestDataOperationsLocalCloud" type="number" min="0" max="100" value="10" />
+                  </label>
+                </div>
+                <fieldset class="forestDataOperationsChecks">
+                  <legend>Drivers</legend>
+                  <label><input type="checkbox" value="Logging" data-data-operations-driver checked /> Logging</label>
+                  <label><input type="checkbox" value="Wildfire" data-data-operations-driver checked /> Wildfire</label>
+                </fieldset>
+                <fieldset class="forestDataOperationsChecks">
+                  <legend>Seasons</legend>
+                  <label><input type="checkbox" value="spring" data-data-operations-season checked /> Spring</label>
+                  <label><input type="checkbox" value="early_summer" data-data-operations-season checked /> Early summer</label>
+                  <label><input type="checkbox" value="late_summer" data-data-operations-season checked /> Late summer</label>
+                  <label><input type="checkbox" value="autumn" data-data-operations-season checked /> Autumn</label>
+                </fieldset>
+                <div class="forestDataOperationsButtonRow">
+                  <button id="forestDataOperationsEventPlanBtn" type="button">Check events</button>
+                  <button id="forestDataOperationsEventSyncBtn" type="button" disabled>Sync events</button>
+                </div>
+              </aside>
+              <section class="forestDataOperationsWork">
+                <div id="forestDataOperationsDownloadSummary" class="forestDataOperationsSummary"></div>
+                <div class="forestDataOperationsListHeader">
+                  <label><input id="forestDataOperationsDownloadSelectAll" type="checkbox" checked /> Select all</label>
+                  <span id="forestDataOperationsDownloadTotals" class="meta">Build a plan first.</span>
+                </div>
+                <div id="forestDataOperationsDownloadRows" class="forestDataOperationsRows"></div>
+              </section>
+              <footer class="forestDataOperationsActionBar">
+                <div id="forestDataOperationsDownloadJob" class="forestDataOperationsJob"></div>
+                <div class="forestDataOperationsButtonRow">
+                  <button id="forestDataOperationsDownloadPlanBtn" type="button">Build plan</button>
+                  <button id="forestDataOperationsDownloadStartBtn" class="primary" type="button" disabled>Start</button>
+                  <button id="forestDataOperationsDownloadCancelBtn" type="button" disabled>Cancel</button>
+                </div>
+              </footer>
+            </section>
+
+            <section class="forestDataOperationsPanel" data-data-operations-panel="export" hidden>
+              <aside class="forestDataOperationsSetup">
+                <h3>Setup</h3>
+                <section class="forestDataOperationsUtility">
+                  <strong>Missing GeoTIFF inventory</strong>
+                  <button id="forestDataOperationsInventoryBtn" type="button">Check cache</button>
+                  <a id="forestDataOperationsInventoryLink" hidden>Open CSV</a>
+                </section>
+                <label>
+                  Source
+                  <select id="forestDataOperationsBundleSource">
+                    <option value="current_filters">Current filters</option>
+                    <option value="missing_geotiff_csv">Missing GeoTIFF CSV</option>
+                    <option value="download_job_result">Download job result</option>
+                  </select>
+                </label>
+                <label id="forestDataOperationsInventoryFileLabel" hidden>
+                  Inventory CSV
+                  <input id="forestDataOperationsInventoryFile" type="file" accept=".csv" />
+                </label>
+                <label>
+                  Profile
+                  <select id="forestDataOperationsBundleProfile">
+                    <option value="geotiff_only">GeoTIFF only</option>
+                    <option value="full">Full</option>
+                    <option value="preview_only">Previews only</option>
+                  </select>
+                </label>
+                <fieldset class="forestDataOperationsChecks">
+                  <legend>Periods</legend>
+                  <label><input type="checkbox" value="PRE" data-data-operations-export-period checked /> PRE</label>
+                  <label><input type="checkbox" value="EVENT" data-data-operations-export-period checked /> EVENT</label>
+                  <label><input type="checkbox" value="POST" data-data-operations-export-period checked /> POST</label>
+                </fieldset>
+                <label>
+                  Limit
+                  <input id="forestDataOperationsBundleLimit" type="number" min="1" placeholder="all" />
+                </label>
+                <label class="toggle"><input id="forestDataOperationsExcludeBad" type="checkbox" checked /> <span>Exclude reviewed bad</span></label>
+                <label class="toggle"><input id="forestDataOperationsCreateZip" type="checkbox" checked /> <span>Create ZIP</span></label>
+              </aside>
+              <section class="forestDataOperationsWork">
+                <div id="forestDataOperationsBundleSummary" class="forestDataOperationsSummary"></div>
+                <div class="forestDataOperationsListHeader">
+                  <label><input id="forestDataOperationsBundleSelectAll" type="checkbox" checked /> Select all</label>
+                  <span id="forestDataOperationsBundleTotals" class="meta">Build a plan first.</span>
+                </div>
+                <div id="forestDataOperationsBundleRows" class="forestDataOperationsRows"></div>
+              </section>
+              <footer class="forestDataOperationsActionBar">
+                <div id="forestDataOperationsBundleJob" class="forestDataOperationsJob"></div>
+                <div class="forestDataOperationsButtonRow">
+                  <button id="forestDataOperationsBundlePlanBtn" type="button">Build plan</button>
+                  <button id="forestDataOperationsBundleStartBtn" class="primary" type="button" disabled>Export</button>
+                  <button id="forestDataOperationsBundleCancelBtn" type="button" disabled>Cancel</button>
+                </div>
+              </footer>
+            </section>
+
+            <section class="forestDataOperationsPanel" data-data-operations-panel="import" hidden>
+              <aside class="forestDataOperationsSetup">
+                <h3>Setup</h3>
+                <label>
+                  Bundle
+                  <select id="forestDataOperationsImportCandidate"></select>
+                </label>
+                <button id="forestDataOperationsImportRefreshBtn" type="button">Refresh bundles</button>
+                <label class="toggle"><input id="forestDataOperationsOverwrite" type="checkbox" /> <span>Overwrite existing files</span></label>
+                <label class="toggle"><input id="forestDataOperationsRebuildPreviews" type="checkbox" checked /> <span>Rebuild previews</span></label>
+              </aside>
+              <section class="forestDataOperationsWork">
+                <div id="forestDataOperationsImportSummary" class="forestDataOperationsSummary"></div>
+                <div class="forestDataOperationsListHeader">
+                  <strong>File operations</strong>
+                  <span id="forestDataOperationsImportTotals" class="meta">Build a plan first.</span>
+                </div>
+                <div id="forestDataOperationsImportRows" class="forestDataOperationsRows"></div>
+              </section>
+              <footer class="forestDataOperationsActionBar">
+                <div id="forestDataOperationsImportJob" class="forestDataOperationsJob"></div>
+                <div class="forestDataOperationsButtonRow">
+                  <button id="forestDataOperationsImportPlanBtn" type="button">Build plan</button>
+                  <button id="forestDataOperationsImportStartBtn" class="primary" type="button" disabled>Import</button>
+                  <button id="forestDataOperationsImportCancelBtn" type="button" disabled>Cancel</button>
+                </div>
+              </footer>
+            </section>
+          </div>
+        </section>
         <section id="forestCompareView" class="forestCompareView forestOnly" hidden>
           <header class="forestCompareHeader">
             <div class="forestCompareTitleBlock">
@@ -418,6 +600,7 @@
               </div>
               <div class="observationActions">
                 <button id="forestDbSyncOpenBtn" type="button">Database Sync</button>
+                <button id="forestDataOperationsOpenBtn" type="button">Data Operations</button>
                 <button id="forestExportBtn">Export filtered</button>
                 <button id="forestClearMapBtn">Clear forest map</button>
               </div>
@@ -451,7 +634,7 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/frontend/app.js?v=forest-db-sync-7"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-db-sync-7"></script>
+    <script src="/frontend/app.js?v=forest-data-ops-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-event-fix-1"></script>
   </body>
 </html>

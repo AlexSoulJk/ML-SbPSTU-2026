@@ -39,6 +39,11 @@ def migrate_forest_database() -> None:
         if "forest_sentinel_downloads" in table_names
         else set()
     )
+    sentinel_search_columns = (
+        {column["name"] for column in inspector.get_columns("forest_sentinel_searches")}
+        if "forest_sentinel_searches" in table_names
+        else set()
+    )
     with engine.begin() as connection:
         if "display_name" not in sample_columns:
             connection.execute(text("ALTER TABLE forest_samples ADD COLUMN display_name VARCHAR(255)"))
@@ -56,6 +61,14 @@ def migrate_forest_database() -> None:
             )
         if "quality_flags_json" not in sentinel_download_columns:
             connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN quality_flags_json TEXT"))
+        if "event_id" not in sentinel_search_columns and "forest_sentinel_searches" in table_names:
+            connection.execute(text("ALTER TABLE forest_sentinel_searches ADD COLUMN event_id VARCHAR(40)"))
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_forest_sentinel_searches_event_id "
+                    "ON forest_sentinel_searches (event_id)"
+                )
+            )
         if (
             "forest_sentinel_scene_reviews" in table_names
             and "forest_sentinel_scene_review_reasons" in table_names

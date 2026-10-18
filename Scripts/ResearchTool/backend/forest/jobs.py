@@ -4,6 +4,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
+from typing import Any
 
 
 def utc_iso() -> str:
@@ -19,6 +20,7 @@ class BackgroundJob:
     total: int = 0
     done: int = 0
     message: str | None = None
+    result: dict[str, Any] | None = None
     cancel_requested: bool = False
     created_at: str = field(default_factory=utc_iso)
     updated_at: str = field(default_factory=utc_iso)
@@ -38,6 +40,7 @@ class InMemoryJobStore:
         *,
         total: int = 0,
         message: str | None = None,
+        result: dict[str, Any] | None = None,
         stage: str = "queued",
     ) -> BackgroundJob:
         with self._lock:
@@ -47,6 +50,7 @@ class InMemoryJobStore:
                 stage=stage,
                 total=total,
                 message=message,
+                result=result,
             )
             self._jobs[job.job_id] = job
             return job
@@ -64,6 +68,7 @@ class InMemoryJobStore:
         done: int | None = None,
         total: int | None = None,
         message: str | None = None,
+        result: dict[str, Any] | None = None,
     ) -> BackgroundJob | None:
         with self._lock:
             job = self._jobs.get(job_id)
@@ -79,6 +84,8 @@ class InMemoryJobStore:
                 job.total = total
             if message is not None:
                 job.message = message
+            if result is not None:
+                job.result = result
             job.updated_at = utc_iso()
             return job
 

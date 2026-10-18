@@ -946,6 +946,102 @@ textarea {
   background: transparent;
 }
 
+.forestSampleEvents {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestSampleEvents .forestPanelHeader {
+  margin-bottom: 8px;
+}
+
+.forestEventRows {
+  display: grid;
+  gap: 6px;
+}
+
+.forestEventRow {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-height: 42px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+  cursor: pointer;
+}
+
+.forestEventRow:hover {
+  border-color: #aabbb0;
+  background: #f4f8f3;
+}
+
+.forestEventRow.active {
+  border-color: var(--brand);
+  box-shadow: inset 3px 0 0 var(--brand);
+  background: #eef5ec;
+}
+
+.forestEventRow > input {
+  width: 14px;
+  min-height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--brand);
+}
+
+.forestEventRowBody {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(78px, auto) minmax(72px, auto);
+  gap: 6px 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.forestEventIdentity,
+.forestEventMetric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forestEventIdentity strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.forestEventIdentity > span,
+.forestEventMetric > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestEventMetric strong {
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.forestEventPeriods {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestEventTrailing {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+
 .forestImageFilterPanel {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
@@ -1085,7 +1181,7 @@ textarea {
 
 .forestSentinelControls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
@@ -1139,10 +1235,32 @@ textarea {
   margin: 1px 0 0;
 }
 
+.forestPreviewEvents,
 .forestPreviewPeriods {
   display: grid;
   gap: 10px;
   margin-top: 10px;
+}
+
+.forestPreviewEvent {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #cad5cd;
+  border-left: 3px solid var(--brand);
+  border-radius: 6px;
+  background: #f6f9f5;
+}
+
+.forestPreviewEvent > h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.forestPreviewEvent .forestPreviewPeriods {
+  margin-top: 0;
 }
 
 .forestPreviewPeriod {
@@ -1154,7 +1272,7 @@ textarea {
   background: #fbfcf8;
 }
 
-.forestPreviewPeriod h4 {
+.forestPreviewPeriod h5 {
   margin: 0;
   color: #425251;
   font-size: 12px;
@@ -1943,6 +2061,319 @@ textarea {
   background: #fbfcf8;
 }
 
+.forestDataOperationsView {
+  position: absolute;
+  inset: 0;
+  z-index: 1260;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: #f7f8f3;
+}
+
+.forestDataOperationsView[hidden],
+.forestDataOperationsPanel[hidden] {
+  display: none !important;
+}
+
+.forestDataOperationsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.forestDataOperationsHeader h2,
+.forestDataOperationsSetup h3 {
+  margin: 0;
+}
+
+.forestDataOperationsHeader h2 {
+  font-size: 15px;
+}
+
+.forestDataOperationsTabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 6px 14px 0;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcf8;
+}
+
+.forestDataOperationsTabs button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  border-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 6px 6px 0 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.forestDataOperationsTabs button.active {
+  border-color: var(--line);
+  border-bottom-color: #fff;
+  color: var(--ink);
+  background: #fff;
+  font-weight: 750;
+}
+
+.forestDataOperationsPanels {
+  min-width: 0;
+  min-height: 0;
+}
+
+.forestDataOperationsPanel {
+  display: grid;
+  grid-template-columns: minmax(260px, 310px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 14px 14px;
+}
+
+.forestDataOperationsSetup,
+.forestDataOperationsWork {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestDataOperationsSetup {
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  padding: 12px;
+}
+
+.forestDataOperationsSetup h3 {
+  color: #425251;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.forestDataOperationsGrid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.forestDataOperationsChecks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.forestDataOperationsChecks legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.forestDataOperationsChecks label,
+.forestDataOperationsListHeader label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.forestDataOperationsChecks input,
+.forestDataOperationsListHeader input,
+.forestDataOperationsRow input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.forestDataOperationsUtility {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--aoi);
+  border-radius: 7px;
+  background: #fffdf7;
+  font-size: 12px;
+}
+
+.forestDataOperationsUtility span {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.forestDataOperationsUtility a,
+.forestDataOperationsArtifact {
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.forestDataOperationsWork {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.forestDataOperationsSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f8faf6;
+}
+
+.forestDataOperationsMetric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forestDataOperationsMetric span {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.forestDataOperationsMetric strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.forestDataOperationsListHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.forestDataOperationsRows {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 0;
+  padding: 10px 12px;
+  overflow: auto;
+}
+
+.forestDataOperationsRow {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1.2fr) minmax(140px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid #91a39e;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 11px;
+}
+
+.forestDataOperationsRow.warning {
+  border-left-color: #c59426;
+  background: #fffdf7;
+}
+
+.forestDataOperationsRow.error {
+  border-left-color: #b84936;
+}
+
+.forestDataOperationsRow strong,
+.forestDataOperationsRow span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.forestDataOperationsRow strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.forestDataOperationsRow span {
+  color: var(--muted);
+}
+
+.forestDataOperationsBadge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #fff !important;
+  background: #71827e;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.forestDataOperationsActionBar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestDataOperationsButtonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.forestDataOperationsJob {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 260px);
+  gap: 6px 10px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestDataOperationsJob strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.forestDataOperationsProgress {
+  grid-column: 1 / -1;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6ece8;
+}
+
+.forestDataOperationsProgress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+}
+
 .forestValidation {
   display: grid;
   grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) auto;
@@ -2262,6 +2693,10 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .forestEventRowBody {
+    grid-template-columns: minmax(110px, 1fr) repeat(2, minmax(72px, auto));
+  }
+
   .forestCompareToolbar {
     grid-template-columns: 1fr;
   }
@@ -2276,5 +2711,23 @@ textarea {
 
   .forestCompareView {
     position: fixed;
+  }
+
+  .forestDataOperationsView {
+    position: fixed;
+  }
+
+  .forestDataOperationsPanel {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(420px, 1fr) auto;
+    overflow: auto;
+  }
+
+  .forestDataOperationsActionBar {
+    grid-column: 1;
+  }
+
+  .forestDataOperationsRow {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 }

@@ -4,6 +4,7 @@ import csv
 import json
 import threading
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..config import FOREST_EXPORTS_DIR
+from ..config import FOREST_EXPORTS_DIR, FOREST_IMPORTS_DIR, PROJECT_ROOT
+from .bundle_service import (
+    bundle_candidates,
+    bundle_plan,
+    download_ids_from_inventory,
+    export_bundle,
+    import_bundle,
+    import_bundle_plan,
+    write_missing_geotiff_inventory,
+)
 from .database import SessionLocal, get_db
 from .db_sync_service import (
     DbSyncError,
@@ -23,6 +33,11 @@ from .db_sync_service import (
 )
 from .geometry import DEFAULT_SAMPLE_PLOT_M, DEFAULT_VIEWER_AOI_M, haversine_m, sample_geometries
 from .hansen_service import analyze_sample_hansen, latest_hansen_payload
+from .event_service import (
+    backfill_hansen_events,
+    sample_events_payload,
+    upsert_event_download_link,
+)
 from .import_service import import_file
 from .jobs import jobs
 from .models import (
@@ -30,11 +45,19 @@ from .models import (
     HansenAnalysis,
     ManualValidation,
     Sample,
+    SampleEvent,
     SampleStatus,
     SentinelDownload,
     SentinelSceneReview,
     SentinelSceneReviewReason,
     utc_now,
+)
+from .sentinel_batch_service import (
+    BatchOptions,
+    execute_sentinel_batch,
+    output_dir,
+    plan_sentinel_batch,
+    write_rows_csv,
 )
 from .sentinel_service import (
     download_sentinel_for_sample,
@@ -98,6 +121,7 @@ class SampleFlagsRequest(BaseModel):
 
 class SentinelSearchRequest(BaseModel):
     event_year: int | None = None
+    event_id: str | None = None
     season_preset: str = "full_snow_free"
     max_cloud: float = Field(default=30.0, ge=0.0, le=100.0)
     top_n: int = Field(default=10, ge=1, le=50)
@@ -106,6 +130,7 @@ class SentinelSearchRequest(BaseModel):
 class SentinelDownloadRequest(BaseModel):
     item: dict[str, Any]
     period: str | None = None
+    event_id: str | None = None
     max_cloud: float = Field(default=30.0, ge=0.0, le=100.0)
 
 
@@ -145,6 +170,54 @@ class DbSyncApplyRequest(BaseModel):
 class SentinelCacheDownloadJobRequest(BaseModel):
     download_ids: list[str] = Field(default_factory=list)
     max_cloud: float = Field(default=30.0, ge=0.0, le=100.0)
+
+
+class EventBackfillRequest(BaseModel):
+    limit: int | None = Field(default=None, ge=1, le=100000)
+
+
+class SentinelBatchRequest(BaseModel):
+    filters: dict[str, Any] = Field(default_factory=dict)
+    mode: str = "empty_samples"
+    limit_samples: int = Field(default=100, ge=1, le=1000)
+    drivers: list[str] = Field(default_factory=lambda: ["Logging", "Wildfire"])
+    seasons: list[str] = Field(
+        default_factory=lambda: ["spring", "early_summer", "late_summer", "autumn"]
+    )
+    target_valid: int = Field(default=10, ge=1, le=50)
+    max_qc_scenes: int = Field(default=50, ge=1, le=100)
+    min_days: int = Field(default=7, ge=0, le=365)
+    stac_max_cloud: float = Field(default=30.0, ge=0.0, le=100.0)
+    local_cloud_threshold: float = Field(default=0.10, ge=0.0, le=1.0)
+    search_top_n: int = Field(default=40, ge=1, le=100)
+    sample_ids: list[str] | None = None
+    selected_operation_keys: list[str] | None = None
+
+
+class BundlePlanRequest(BaseModel):
+    source: str = "current_filters"
+    filters: dict[str, Any] = Field(default_factory=dict)
+    inventory_path: str | None = None
+    selection_path: str | None = None
+    download_ids: list[str] = Field(default_factory=list)
+    periods: list[str] | None = None
+    profile: str = "geotiff_only"
+    exclude_reviewed_bad: bool = True
+    limit: int | None = Field(default=None, ge=1, le=100000)
+
+
+class BundleExportJobRequest(BaseModel):
+    download_ids: list[str] = Field(default_factory=list)
+    profile: str = "geotiff_only"
+    exclude_reviewed_bad: bool = True
+    create_zip: bool = True
+    source: str = "selection"
+
+
+class BundleImportRequest(BaseModel):
+    bundle_path: str
+    overwrite_existing: bool = False
+    rebuild_previews: bool = True
 
 
 def json_or_none(value: str | None) -> Any:
@@ -214,6 +287,7 @@ def sample_detail(sample: Sample, db: Session) -> dict[str, Any]:
         viewer_aoi_m=DEFAULT_VIEWER_AOI_M,
     )
     payload["hansen"] = latest_hansen_payload(db, sample.sample_id)
+    payload["events"] = sample_events_payload(db, sample.sample_id)
     payload["sentinel"] = latest_sentinel_payload(db, sample.sample_id)
     return payload
 
@@ -527,6 +601,260 @@ def run_sentinel_cache_download_job(job_id: str, download_ids: list[str], max_cl
         db.close()
 
 
+def batch_options_from_request(request: SentinelBatchRequest) -> BatchOptions:
+    return BatchOptions(
+        mode=request.mode,
+        seasons=tuple(request.seasons),
+        target_valid=request.target_valid,
+        max_qc_scenes=request.max_qc_scenes,
+        min_days=request.min_days,
+        stac_max_cloud=request.stac_max_cloud,
+        local_cloud_threshold=request.local_cloud_threshold,
+        search_top_n=request.search_top_n,
+    )
+
+
+def selected_batch_samples(db: Session, request: SentinelBatchRequest) -> list[Sample]:
+    samples = read_filtered_samples(db, request.filters)
+    if request.drivers:
+        drivers = set(request.drivers)
+        samples = [
+            sample
+            for sample in samples
+            if sample.driver_primary in drivers or sample.driver_secondary in drivers
+        ]
+    if request.sample_ids is not None:
+        selected_ids = set(request.sample_ids)
+        samples = [sample for sample in samples if sample.sample_id in selected_ids]
+    return samples[: request.limit_samples]
+
+
+def run_event_backfill_job(job_id: str, limit: int | None) -> None:
+    db = SessionLocal()
+
+    def progress(done: int, total: int, message: str) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage="syncing_events",
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        jobs.update(job_id, status="running", stage="planning", message="Loading Hansen analyses")
+        result = backfill_hansen_events(
+            db,
+            dry_run=False,
+            limit=limit,
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        artifact_dir = output_dir("event_backfill")
+        operations_path = artifact_dir / "operations.csv"
+        errors_path = artifact_dir / "errors.csv"
+        summary_path = artifact_dir / "summary.json"
+        write_rows_csv(operations_path, result["rows"])
+        write_rows_csv(
+            errors_path,
+            [row for row in result["rows"] if row.get("action") == "failed"],
+        )
+        result.update(
+            {
+                "artifact_dir": str(artifact_dir),
+                "operations_csv": str(operations_path),
+                "errors_csv": str(errors_path),
+            }
+        )
+        summary_path.write_text(
+            json.dumps({key: value for key, value in result.items() if key != "rows"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        cancelled = job_cancel_requested(job_id) or result.get("cancelled")
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "completed_with_errors" if result["failed"] else "completed",
+            stage="cancelled" if cancelled else "done",
+            done=result["processed"],
+            total=result["total"],
+            message=(
+                f"Events: {result['event_rows']} rows, {result['failed']} failed"
+            ),
+            result=result,
+        )
+    except Exception as exc:
+        db.rollback()
+        jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
+def run_sentinel_batch_job(job_id: str, request: SentinelBatchRequest) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        samples = selected_batch_samples(db, request)
+        plan = plan_sentinel_batch(db, samples, batch_options_from_request(request))
+        actionable_ids = {
+            row["sample_id"] for row in plan["samples"] if row["stop_reason"] is None
+        }
+        samples = [sample for sample in samples if sample.sample_id in actionable_ids]
+        jobs.update(
+            job_id,
+            status="running",
+            stage="planning",
+            total=len(samples),
+            message=f"Preparing {len(samples)} sample(s)",
+        )
+        result = execute_sentinel_batch(
+            db,
+            samples,
+            batch_options_from_request(request),
+            selected_operation_keys=(
+                set(request.selected_operation_keys)
+                if request.selected_operation_keys is not None
+                else None
+            ),
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "completed",
+            stage="cancelled" if cancelled else "done",
+            done=len(samples),
+            total=len(samples),
+            message=f"Created {result['downloads_created']} Sentinel download(s)",
+            result=result,
+        )
+    except Exception as exc:
+        db.rollback()
+        jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
+def run_missing_geotiff_job(job_id: str) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        result = write_missing_geotiff_inventory(db, progress=progress)
+        jobs.update(
+            job_id,
+            status="completed",
+            stage="done",
+            done=1,
+            total=1,
+            message=f"Found {result['missing_geotiffs']} missing GeoTIFF(s)",
+            result=result,
+        )
+    except Exception as exc:
+        jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
+def run_bundle_export_job(job_id: str, request: BundleExportJobRequest) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        result = export_bundle(
+            db,
+            request.download_ids,
+            profile=request.profile,
+            exclude_reviewed_bad=request.exclude_reviewed_bad,
+            create_zip=request.create_zip,
+            source=request.source,
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "completed_with_errors" if result["failed"] else "completed",
+            stage="cancelled" if cancelled else "done",
+            done=result["unique_files"],
+            total=result["unique_files"],
+            message=f"Bundle: {result['copied']} copied, {result['failed']} failed",
+            result=result,
+        )
+    except Exception as exc:
+        jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
+def run_bundle_import_job(job_id: str, request: BundleImportRequest) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        result = import_bundle(
+            db,
+            request.bundle_path,
+            overwrite_existing=request.overwrite_existing,
+            rebuild_previews=request.rebuild_previews,
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "completed_with_errors" if result["failed"] else "completed",
+            stage="cancelled" if cancelled else "done",
+            done=result["files_processed"],
+            total=result["files_processed"],
+            message=f"Import: {result['copied']} copied, {result['failed']} failed",
+            result=result,
+        )
+    except Exception as exc:
+        db.rollback()
+        jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
 @router.post("/import")
 async def import_samples(
     files: list[UploadFile] = File(...),
@@ -658,6 +986,19 @@ def save_sample_flags(
         raise HTTPException(status_code=404, detail="Sample was not found.")
 
     if request.has_multiple_events is not None:
+        has_hansen_events = db.scalar(
+            select(SampleEvent.event_id)
+            .where(
+                SampleEvent.sample_id == sample_id,
+                SampleEvent.source == "HANSEN",
+            )
+            .limit(1)
+        )
+        if has_hansen_events is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Multiple events is derived from Hansen events and is read-only.",
+            )
         sample.has_multiple_events = bool(request.has_multiple_events)
     sample.updated_at = utc_now()
     db.commit()
@@ -908,6 +1249,309 @@ def start_sentinel_cache_download_job(request: SentinelCacheDownloadJobRequest) 
     return job.snapshot()
 
 
+def data_operation_input_path(raw_path: str, *, suffixes: set[str] | None = None) -> Path:
+    path = Path(raw_path).resolve(strict=False)
+    allowed_roots = [
+        FOREST_IMPORTS_DIR.resolve(strict=False),
+        (PROJECT_ROOT / "Scripts" / "ResearchScripts" / "Outputs").resolve(strict=False),
+    ]
+    try:
+        allowed = any(path == root or path.is_relative_to(root) for root in allowed_roots)
+    except AttributeError:
+        allowed = any(str(path).startswith(str(root)) for root in allowed_roots)
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Input path is outside allowed data-operation folders.")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Input file was not found: {path}")
+    if suffixes and path.suffix.lower() not in suffixes:
+        raise HTTPException(status_code=400, detail=f"Expected one of: {', '.join(sorted(suffixes))}")
+    return path
+
+
+def resolve_bundle_download_ids(
+    db: Session,
+    request: BundlePlanRequest,
+) -> tuple[list[str], dict[str, Any]]:
+    source_details: dict[str, Any] = {}
+    if request.source == "current_filters":
+        samples = read_filtered_samples(db, request.filters)
+        sample_ids = [sample.sample_id for sample in samples]
+        if not sample_ids:
+            return [], {"sample_count": 0}
+        stmt = select(SentinelDownload).where(SentinelDownload.sample_id.in_(sample_ids))
+        if request.periods:
+            stmt = stmt.where(SentinelDownload.period.in_(request.periods))
+        downloads = list(
+            db.scalars(
+                stmt.order_by(
+                    SentinelDownload.sample_id,
+                    SentinelDownload.period,
+                    SentinelDownload.scene_id,
+                )
+            )
+        )
+        ids = [download.download_id for download in downloads]
+        source_details["sample_count"] = len(sample_ids)
+    elif request.source == "missing_geotiff_csv":
+        if not request.inventory_path:
+            raise HTTPException(status_code=400, detail="inventory_path is required.")
+        path = data_operation_input_path(request.inventory_path, suffixes={".csv"})
+        ids, rows = download_ids_from_inventory(path)
+        db_rows = list(
+            db.scalars(select(SentinelDownload).where(SentinelDownload.download_id.in_(ids)))
+        ) if ids else []
+        by_id = {row.download_id: row for row in db_rows}
+        identity_conflicts = [
+            {
+                "download_id": row.get("download_id"),
+                "inventory_sample_id": row.get("sample_id"),
+                "database_sample_id": by_id[row["download_id"]].sample_id,
+                "inventory_scene_id": row.get("scene_id"),
+                "database_scene_id": by_id[row["download_id"]].scene_id,
+            }
+            for row in rows
+            if row.get("download_id") in by_id
+            and (
+                (row.get("sample_id") and row.get("sample_id") != by_id[row["download_id"]].sample_id)
+                or (row.get("scene_id") and row.get("scene_id") != by_id[row["download_id"]].scene_id)
+            )
+        ]
+        source_details.update(
+            {
+                "inventory_path": str(path),
+                "inventory_rows": len(rows),
+                "identity_conflicts": identity_conflicts,
+                "identity_conflict_count": len(identity_conflicts),
+            }
+        )
+    elif request.source == "download_job_result":
+        if not request.selection_path:
+            raise HTTPException(status_code=400, detail="selection_path is required.")
+        path = data_operation_input_path(request.selection_path, suffixes={".json"})
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        ids = [str(value) for value in payload.get("download_ids", []) if value]
+        source_details["selection_path"] = str(path)
+    elif request.source == "selection":
+        ids = request.download_ids
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported bundle source: {request.source}")
+    ids = list(dict.fromkeys(ids))
+    if request.periods and ids:
+        allowed_ids = set(
+            db.scalars(
+                select(SentinelDownload.download_id).where(
+                    SentinelDownload.download_id.in_(ids),
+                    SentinelDownload.period.in_(request.periods),
+                )
+            )
+        )
+        ids = [download_id for download_id in ids if download_id in allowed_ids]
+    if request.limit is not None:
+        ids = ids[: request.limit]
+    return ids, source_details
+
+
+@router.post("/data-operations/events/backfill/plan")
+def event_backfill_plan(
+    request: EventBackfillRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return backfill_hansen_events(db, dry_run=True, limit=request.limit)
+
+
+@router.post("/data-operations/events/backfill/jobs")
+def start_event_backfill_job(request: EventBackfillRequest) -> dict[str, Any]:
+    job = jobs.create("sample_event_backfill", message="Queued Hansen event backfill")
+    thread = threading.Thread(
+        target=run_event_backfill_job,
+        args=(job.job_id, request.limit),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
+
+
+@router.post("/data-operations/sentinel-download/plan")
+def sentinel_batch_plan(
+    request: SentinelBatchRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        samples = selected_batch_samples(db, request)
+        return plan_sentinel_batch(db, samples, batch_options_from_request(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/sentinel-download/jobs")
+def start_sentinel_batch_job(
+    request: SentinelBatchRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        samples = selected_batch_samples(db, request)
+        plan = plan_sentinel_batch(db, samples, batch_options_from_request(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not plan["summary"]["samples_actionable"]:
+        raise HTTPException(status_code=400, detail="No actionable samples matched the batch settings.")
+    if request.selected_operation_keys is not None and not request.selected_operation_keys:
+        raise HTTPException(status_code=400, detail="Select at least one operation row.")
+    job = jobs.create(
+        "sentinel_batch_download",
+        total=plan["summary"]["samples_actionable"],
+        message=f"Queued {plan['summary']['samples_actionable']} actionable sample(s)",
+    )
+    thread = threading.Thread(
+        target=run_sentinel_batch_job,
+        args=(job.job_id, request),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
+
+
+@router.post("/data-operations/missing-geotiffs/jobs")
+def start_missing_geotiff_job() -> dict[str, Any]:
+    job = jobs.create(
+        "sentinel_missing_geotiff_inventory",
+        total=1,
+        message="Queued Sentinel GeoTIFF cache check",
+    )
+    thread = threading.Thread(target=run_missing_geotiff_job, args=(job.job_id,), daemon=True)
+    thread.start()
+    return job.snapshot()
+
+
+@router.get("/data-operations/missing-geotiffs/{job_id}/artifact")
+def get_missing_geotiff_artifact(job_id: str) -> FileResponse:
+    job = jobs.get(job_id)
+    if job is None or job.kind != "sentinel_missing_geotiff_inventory" or not job.result:
+        raise HTTPException(status_code=404, detail="Missing GeoTIFF artifact is not ready.")
+    csv_path = job.result.get("csv_path")
+    if not csv_path:
+        raise HTTPException(status_code=404, detail="Missing GeoTIFF CSV is not available.")
+    path = data_operation_input_path(str(csv_path), suffixes={".csv"})
+    return FileResponse(path, filename=path.name)
+
+
+@router.post("/data-operations/inventory/upload")
+async def upload_missing_geotiff_inventory(file: UploadFile = File(...)) -> dict[str, Any]:
+    original_name = Path(file.filename or "missing_sentinel_geotiffs.csv").name
+    if Path(original_name).suffix.lower() != ".csv":
+        raise HTTPException(status_code=400, detail="A CSV inventory file is required.")
+    target_dir = FOREST_IMPORTS_DIR / "data_operations"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{uuid.uuid4().hex[:10]}_{original_name}"
+    target.write_bytes(await file.read())
+    return {"path": str(target), "name": original_name, "bytes": target.stat().st_size}
+
+
+@router.post("/data-operations/bundles/plan")
+def create_bundle_plan(
+    request: BundlePlanRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        download_ids, source_details = resolve_bundle_download_ids(db, request)
+        result = bundle_plan(
+            db,
+            download_ids,
+            profile=request.profile,
+            exclude_reviewed_bad=request.exclude_reviewed_bad,
+            source=request.source,
+        )
+        result["source_details"] = source_details
+        result["summary"]["identity_conflicts"] = source_details.get(
+            "identity_conflict_count", 0
+        )
+        return result
+    except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/bundles/jobs")
+def start_bundle_export_job(request: BundleExportJobRequest) -> dict[str, Any]:
+    if not request.download_ids:
+        raise HTTPException(status_code=400, detail="Select at least one Sentinel download.")
+    job = jobs.create(
+        "sentinel_bundle_export",
+        total=len(request.download_ids),
+        message=f"Queued bundle with {len(request.download_ids)} download(s)",
+    )
+    thread = threading.Thread(
+        target=run_bundle_export_job,
+        args=(job.job_id, request),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
+
+
+@router.get("/data-operations/bundles/{job_id}/artifact")
+def get_bundle_artifact(job_id: str) -> FileResponse:
+    job = jobs.get(job_id)
+    if job is None or not job.result:
+        raise HTTPException(status_code=404, detail="Bundle artifact is not ready.")
+    raw_path = job.result.get("zip_path") or job.result.get("manifest_path")
+    if not raw_path:
+        raise HTTPException(status_code=404, detail="Bundle artifact is not available.")
+    path = data_operation_input_path(str(raw_path))
+    return FileResponse(path, filename=path.name)
+
+
+@router.get("/data-operations/bundle-import/candidates")
+def list_bundle_candidates() -> dict[str, Any]:
+    return {"items": bundle_candidates()}
+
+
+@router.post("/data-operations/bundle-import/plan")
+def create_bundle_import_plan(
+    request: BundleImportRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return import_bundle_plan(db, request.bundle_path)
+    except (ValueError, FileNotFoundError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/bundle-import/jobs")
+def start_bundle_import_job(
+    request: BundleImportRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        plan = import_bundle_plan(db, request.bundle_path)
+    except (ValueError, FileNotFoundError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not plan["can_apply"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Bundle validation failed. Resolve missing database rows, identity conflicts, missing files, or checksum mismatches first.",
+        )
+    job = jobs.create(
+        "sentinel_bundle_import",
+        total=plan["summary"]["files"],
+        message=f"Queued {plan['summary']['copy']} file(s) for import",
+    )
+    thread = threading.Thread(
+        target=run_bundle_import_job,
+        args=(job.job_id, request),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
+
+
+@router.get("/data-operations/artifact")
+def get_data_operation_artifact(path: str = Query(...)) -> FileResponse:
+    resolved = data_operation_input_path(path)
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail="Artifact path must point to a file.")
+    return FileResponse(resolved, filename=resolved.name)
+
+
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     job = jobs.get(job_id)
@@ -1009,6 +1653,12 @@ def sentinel_search(
     if sample is None:
         raise HTTPException(status_code=404, detail="Sample was not found.")
     event_year = request.event_year or sample.source_event_year
+    event_id = request.event_id
+    if event_id:
+        event = db.get(SampleEvent, event_id)
+        if event is None or event.sample_id != sample_id:
+            raise HTTPException(status_code=400, detail="Event does not belong to this sample.")
+        event_year = event.event_year
     hansen = latest_hansen_payload(db, sample_id)
     if event_year is None and hansen:
         event_year = hansen.get("event_year")
@@ -1022,6 +1672,7 @@ def sentinel_search(
             db,
             sample,
             event_year=int(event_year),
+            event_id=event_id,
             season_preset=request.season_preset,
             max_cloud=request.max_cloud,
             top_n=request.top_n,
@@ -1040,14 +1691,28 @@ def sentinel_download(
     sample = db.get(Sample, sample_id)
     if sample is None:
         raise HTTPException(status_code=404, detail="Sample was not found.")
+    if request.event_id:
+        event = db.get(SampleEvent, request.event_id)
+        if event is None or event.sample_id != sample_id:
+            raise HTTPException(status_code=400, detail="Event does not belong to this sample.")
     try:
-        return download_sentinel_for_sample(
+        result = download_sentinel_for_sample(
             db,
             sample,
             item=request.item,
             period=request.period,
             max_cloud=request.max_cloud,
         )
+        if request.event_id and request.period:
+            upsert_event_download_link(
+                db,
+                event_id=request.event_id,
+                download_id=result["download_id"],
+                period=request.period,
+            )
+            db.commit()
+            result["event_id"] = request.event_id
+        return result
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
