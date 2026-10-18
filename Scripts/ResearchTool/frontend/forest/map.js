@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=forest-iter2-24";
+import { forestState } from "./state.js?v=forest-db-sync-7";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 
@@ -282,6 +282,13 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
     candidates: forestState.mapClickCandidates.length,
     selected: detail?.sample_id || null,
     fit,
+    sentinel_visible: Boolean(visibility.sentinel),
+    active_preview_view: forestState.activeSentinelPreview?.view || null,
+    active_preview_url: forestState.activeSentinelPreview?.url || null,
+    active_preview_cache: forestState.activeSentinelPreview?.cache_exists ?? null,
+    active_preview_bbox: Boolean(forestState.activeSentinelPreview?.bbox),
+    hansen_visible: Boolean(visibility.hansen),
+    hansen_layer: forestState.hansenLayer || null,
   });
 
   if (visibility.samples && samples.length) {
@@ -323,11 +330,41 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
   if (detail?.geometry) {
     const sentinel = visibility.sentinel ? forestState.activeSentinelPreview : null;
     if (sentinel?.url && sentinel?.bbox) {
-      forestState.layers.sentinel = L.imageOverlay(
+      debugMap("sentinel overlay add", {
+        view: sentinel.view || null,
+        url: sentinel.url,
+        cache_exists: sentinel.cache_exists ?? null,
+      });
+      const sentinelOverlay = L.imageOverlay(
         sentinel.url,
         bboxToBounds(sentinel.bbox),
         { pane: "forestSentinelPane", opacity: 0.95, interactive: false },
-      ).addTo(map);
+      );
+      sentinelOverlay.on("load", () => {
+        debugMap("sentinel overlay loaded", {
+          view: sentinel.view || null,
+          url: sentinel.url,
+        });
+      });
+      sentinelOverlay.on("error", () => {
+        debugMap("sentinel overlay missing cache", {
+          url: sentinel.url,
+          view: sentinel.view || null,
+        });
+        if (forestState.activeSentinelPreview?.url === sentinel.url) {
+          forestState.activeSentinelPreview = null;
+        }
+        removeLayer("sentinel");
+      });
+      forestState.layers.sentinel = sentinelOverlay.addTo(map);
+    } else {
+      debugMap("sentinel overlay skipped", {
+        visibility: Boolean(visibility.sentinel),
+        has_active_preview: Boolean(forestState.activeSentinelPreview),
+        has_url: Boolean(forestState.activeSentinelPreview?.url),
+        has_bbox: Boolean(forestState.activeSentinelPreview?.bbox),
+        cache_exists: forestState.activeSentinelPreview?.cache_exists ?? null,
+      });
     }
 
     if (visibility.aoi) {
@@ -370,7 +407,12 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
 
     const overlay = visibility.hansen ? hansenOverlay(detail) : null;
     if (overlay?.png_url && overlay?.bbox) {
-      forestState.layers.hansen = L.imageOverlay(
+      debugMap("hansen overlay add", {
+        mask_type: overlay.mask_type || null,
+        url: overlay.png_url,
+        png_exists: overlay.png_exists ?? null,
+      });
+      const hansenImage = L.imageOverlay(
         overlay.png_url,
         bboxToBounds(overlay.bbox),
         {
@@ -379,7 +421,29 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
           interactive: false,
           className: `forestHansenOverlay ${forestState.hansenPixelated ? "pixelated" : ""}`,
         },
-      ).addTo(map);
+      );
+      hansenImage.on("load", () => {
+        debugMap("hansen overlay loaded", {
+          mask_type: overlay.mask_type || null,
+          url: overlay.png_url,
+        });
+      });
+      hansenImage.on("error", () => {
+        debugMap("hansen overlay missing cache", {
+          mask_type: overlay.mask_type || null,
+          url: overlay.png_url,
+        });
+        removeLayer("hansen");
+      });
+      forestState.layers.hansen = hansenImage.addTo(map);
+    } else if (visibility.hansen) {
+      debugMap("hansen overlay skipped", {
+        has_overlay: Boolean(overlay),
+        mask_type: overlay?.mask_type || null,
+        has_url: Boolean(overlay?.png_url),
+        has_bbox: Boolean(overlay?.bbox),
+        png_exists: overlay?.png_exists ?? null,
+      });
     }
 
     if (fit) {

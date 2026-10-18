@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=forest-iter2-24" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=forest-db-sync-7" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -287,6 +287,42 @@
             </section>
           </div>
         </aside>
+        <section id="forestDbSyncView" class="forestDbSyncView forestOnly" hidden>
+          <header class="forestDbSyncHeader">
+            <div class="forestCompareTitleBlock">
+              <h2>Database Sync</h2>
+              <div id="forestDbSyncStatus" class="meta">Select incoming SQLite database.</div>
+            </div>
+            <div class="forestCompareActions">
+              <button id="forestDbSyncRefreshBtn" type="button">Refresh</button>
+              <button id="forestDbSyncCloseBtn" type="button">Close</button>
+            </div>
+          </header>
+          <div class="forestDbSyncToolbar">
+            <label>
+              Incoming DB
+              <select id="forestDbSyncCandidateSelect"></select>
+            </label>
+            <button id="forestDbSyncCompareBtn" class="primary" type="button">Compare</button>
+            <button id="forestDbSyncApplyBtn" type="button" disabled>Apply safe</button>
+          </div>
+          <div class="forestDbSyncBody">
+            <section class="forestDbSyncSummaryPanel">
+              <h3>Summary</h3>
+              <div id="forestDbSyncSummary" class="forestDbSyncSummary"></div>
+            </section>
+            <section class="forestDbSyncOperationsPanel">
+              <div class="forestDbSyncOperationsHeader">
+                <h3>Operations</h3>
+                <div id="forestDbSyncTotals" class="meta">no compare yet</div>
+              </div>
+              <div id="forestDbSyncWarnings" class="forestDbSyncWarnings"></div>
+              <div id="forestDbSyncCacheRepair" class="forestDbSyncCacheRepair"></div>
+              <div id="forestDbSyncOperations" class="forestDbSyncOperations"></div>
+              <div id="forestDbSyncApplyResult" class="forestDbSyncApplyResult"></div>
+            </section>
+          </div>
+        </section>
         <section id="forestCompareView" class="forestCompareView forestOnly" hidden>
           <header class="forestCompareHeader">
             <div class="forestCompareTitleBlock">
@@ -381,6 +417,7 @@
                 <div id="forestStatusLine" class="drawerStatus">ready</div>
               </div>
               <div class="observationActions">
+                <button id="forestDbSyncOpenBtn" type="button">Database Sync</button>
                 <button id="forestExportBtn">Export filtered</button>
                 <button id="forestClearMapBtn">Clear forest map</button>
               </div>
@@ -414,7 +451,7 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/frontend/app.js?v=forest-iter2-24"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-iter2-24"></script>
+    <script src="/frontend/app.js?v=forest-db-sync-7"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-db-sync-7"></script>
   </body>
 </html>

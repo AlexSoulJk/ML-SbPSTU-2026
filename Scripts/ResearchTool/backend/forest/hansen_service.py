@@ -179,10 +179,36 @@ def cache_url(path: Path) -> str | None:
     return forest_cache_url(path)
 
 
+def mask_tif_path(mask: HansenMask) -> Path:
+    stored_path = resolve_storage_path(mask.local_path)
+    if stored_path.exists():
+        return stored_path
+    canonical_path = (
+        FOREST_HANSEN_CACHE_DIR
+        / "masks"
+        / mask.sample_id
+        / mask.analysis_id
+        / f"{mask.mask_type}.tif"
+    )
+    if canonical_path.exists():
+        return canonical_path
+    return stored_path
+
+
+def mask_png_payload(mask: HansenMask) -> dict[str, Any]:
+    tif_path = mask_tif_path(mask)
+    png_path = tif_path.with_suffix(".png")
+    png_exists = png_path.exists()
+    return {
+        "png_url": cache_url(png_path) if png_exists else None,
+        "png_exists": png_exists,
+    }
+
+
 def mask_legend(mask: HansenMask) -> list[dict[str, Any]]:
     if mask.mask_type not in {"all_loss", "aoi_all_loss"}:
         return []
-    path = resolve_storage_path(mask.local_path)
+    path = mask_tif_path(mask)
     if not path.exists():
         return []
     with rasterio.open(path) as dataset:
@@ -281,6 +307,20 @@ def latest_hansen_payload(db: Session, sample_id: str) -> dict[str, Any] | None:
     masks = list(
         db.scalars(select(HansenMask).where(HansenMask.analysis_id == analysis.analysis_id))
     )
+    mask_payloads = []
+    for mask in masks:
+        png_payload = mask_png_payload(mask)
+        mask_payloads.append(
+            {
+                "mask_id": mask.mask_id,
+                "mask_type": mask.mask_type,
+                "local_path": mask.local_path,
+                **png_payload,
+                "bbox": json.loads(mask.bbox_json),
+                "legend": mask_legend(mask),
+            }
+        )
+
     return {
         "analysis_id": analysis.analysis_id,
         "event_year": analysis.event_year,
@@ -290,17 +330,7 @@ def latest_hansen_payload(db: Session, sample_id: str) -> dict[str, Any] | None:
         "status": analysis.status,
         "histogram": json.loads(analysis.histogram_json),
         "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
-        "masks": [
-            {
-                "mask_id": mask.mask_id,
-                "mask_type": mask.mask_type,
-                "local_path": mask.local_path,
-                "png_url": cache_url(resolve_storage_path(mask.local_path).with_suffix(".png")),
-                "bbox": json.loads(mask.bbox_json),
-                "legend": mask_legend(mask),
-            }
-            for mask in masks
-        ],
+        "masks": mask_payloads,
     }
 
 

@@ -10,3 +10,4 @@ Specs
 *.kml
 Scripts/ResearchScripts/Outputs
 Scripts/ResearchScripts/Data/Images
+*.pt

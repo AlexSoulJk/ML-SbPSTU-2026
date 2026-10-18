@@ -32,7 +32,7 @@ from .models import (
     SentinelSceneReviewReason,
     SentinelSearch,
 )
-from .storage_paths import forest_cache_url, to_storage_path
+from .storage_paths import forest_cache_url, resolve_storage_path, to_storage_path
 
 
 SEASON_PRESETS = {
@@ -688,6 +688,99 @@ def download_sentinel_for_sample(
     }
 
 
+def restore_sentinel_download_cache(
+    db: Session,
+    download: SentinelDownload,
+    *,
+    max_cloud: float = 30.0,
+) -> dict[str, Any]:
+    metadata = json.loads(download.metadata_json or "{}")
+    item = metadata.get("item")
+    if not isinstance(item, dict) or not item.get("id") or not item.get("datetime"):
+        raise ValueError(f"Sentinel download {download.download_id} has no reusable STAC item metadata.")
+
+    bbox = json.loads(download.bbox_json)
+    width = int(metadata.get("width") or 0)
+    height = int(metadata.get("height") or 0)
+    if width <= 0 or height <= 0:
+        width, height = pixel_size_for_bbox(bbox)
+
+    tif_path = resolve_storage_path(download.local_path)
+    metadata_path = tif_path.with_suffix(".json")
+    cache_status = "hit"
+    if not tif_path.exists() or not metadata_path.exists():
+        time_from, time_to = tight_time_range(item["datetime"])
+        payload = process_request(
+            bbox=tuple(bbox),
+            time_from=time_from,
+            time_to=time_to,
+            evalscript=S2_RAW_EVALSCRIPT,
+            width=width,
+            height=height,
+            output_type="image/tiff",
+            max_cloud=max_cloud,
+        )
+        content, content_type = run_process_api(payload, accept="image/tiff")
+        save_bytes(tif_path, content)
+        metadata = {
+            **metadata,
+            "download_id": download.download_id,
+            "sample_id": download.sample_id,
+            "period": download.period,
+            "item": item,
+            "bbox": bbox,
+            "width": width,
+            "height": height,
+            "bands": S2_BANDS,
+            "path": to_storage_path(tif_path),
+            "content_type": content_type,
+            "bytes": len(content),
+            "request": payload,
+        }
+        write_json(metadata_path, metadata)
+        cache_status = "miss"
+
+    metrics = cloud_metrics(tif_path)
+    previews = derive_previews(
+        db,
+        sample_id=download.sample_id,
+        download_id=download.download_id,
+        tif_path=tif_path,
+        bbox=bbox,
+    )
+
+    download.local_path = to_storage_path(tif_path) or str(tif_path)
+    download.bbox_json = json.dumps(bbox)
+    download.bands_json = json.dumps(S2_BANDS)
+    download.cloud_fraction = float(metrics["cloud_fraction"])
+    download.shadow_fraction = float(metrics["shadow_fraction"])
+    download.nodata_fraction = float(metrics["nodata_fraction"])
+    download.dark_fraction = float(metrics["dark_fraction"])
+    download.is_bad_cloud = bool(metrics["is_bad_cloud"])
+    download.is_bad_quality = bool(metrics["is_bad_quality"])
+    download.quality_flags_json = json.dumps(metrics["quality_flags"], ensure_ascii=False, sort_keys=True)
+    download.metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    apply_auto_scene_review(db, download.download_id, metrics)
+    db.commit()
+
+    return {
+        "download_id": download.download_id,
+        "sample_id": download.sample_id,
+        "scene_id": download.scene_id,
+        "period": download.period,
+        "datetime": item.get("datetime"),
+        "cache_status": cache_status,
+        "local_path": download.local_path,
+        "cloud_fraction": metrics["cloud_fraction"],
+        "shadow_fraction": metrics["shadow_fraction"],
+        "nodata_fraction": metrics["nodata_fraction"],
+        "dark_fraction": metrics["dark_fraction"],
+        "is_bad_quality": metrics["is_bad_quality"],
+        "quality_flags": metrics["quality_flags"],
+        "previews": previews,
+    }
+
+
 def sentinel_review_reason_payloads(
     db: Session,
     download_id: str,
@@ -761,6 +854,7 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
     )
     reason_payloads = sentinel_review_reason_payloads(db, download.download_id, review)
     metadata = json.loads(download.metadata_json)
+    download_cache_exists = resolve_storage_path(download.local_path).exists()
     return {
         "download_id": download.download_id,
         "sample_id": download.sample_id,
@@ -770,6 +864,7 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         "bbox": json.loads(download.bbox_json),
         "bands": json.loads(download.bands_json),
         "local_path": download.local_path,
+        "cache_exists": download_cache_exists,
         "cloud_fraction": download.cloud_fraction,
         "shadow_fraction": download.shadow_fraction,
         "nodata_fraction": download.nodata_fraction,
@@ -782,7 +877,11 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
             {
                 "view": preview.view,
                 "path": preview.png_path,
-                "url": forest_cache_url(preview.png_path),
+                "url": forest_cache_url(preview.png_path)
+                if resolve_storage_path(preview.png_path).exists()
+                else None,
+                "cache_exists": resolve_storage_path(preview.png_path).exists(),
+                "metadata_exists": resolve_storage_path(preview.metadata_path).exists(),
                 "bbox": json.loads(download.bbox_json),
             }
             for preview in previews

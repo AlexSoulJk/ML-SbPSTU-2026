@@ -91,6 +91,10 @@ label {
   grid-template-columns: 54px minmax(0, 1fr);
 }
 
+.shell.contextFocus {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -167,6 +171,10 @@ label {
 .shell.sidebarCollapsed .modeSwitch,
 .shell.sidebarCollapsed .sidebar > .panel {
   display: none !important;
+}
+
+.shell.contextFocus .sidebar {
+  display: none;
 }
 
 .modeSwitch {
@@ -1363,6 +1371,25 @@ textarea {
   background: #edf0e9;
 }
 
+.forestPreviewCard.missingCache {
+  color: var(--muted);
+  background: #f7f4ea;
+}
+
+.forestPreviewMissingThumb {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px dashed #c8b875;
+  border-radius: 4px;
+  color: #7b6a23;
+  background: #fff9df;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .forestPreviewRow.excluded .forestPreviewCard img {
   filter: grayscale(0.45) saturate(0.72);
 }
@@ -1548,6 +1575,372 @@ textarea {
   min-height: 0;
   height: 100%;
   background: #dce5de;
+}
+
+.forestDbSyncView {
+  position: absolute;
+  inset: 0;
+  z-index: 1240;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: #f7f8f3;
+}
+
+.forestDbSyncView[hidden] {
+  display: none !important;
+}
+
+.forestDbSyncHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.forestDbSyncHeader h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.forestDbSyncToolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcf8;
+}
+
+.forestDbSyncBody {
+  display: grid;
+  grid-template-columns: minmax(250px, 330px) minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 14px 14px;
+  overflow: hidden;
+}
+
+.forestDbSyncSummaryPanel,
+.forestDbSyncOperationsPanel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.forestDbSyncSummaryPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.forestDbSyncOperationsPanel {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.forestDbSyncSummaryPanel h3,
+.forestDbSyncOperationsHeader h3 {
+  margin: 0;
+  color: #425251;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.forestDbSyncSummary {
+  display: grid;
+  gap: 8px;
+}
+
+.forestDbSyncSummaryCard {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8faf6;
+}
+
+.forestDbSyncSummaryCard strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.forestDbSyncMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.forestDbSyncMetric {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestDbSyncMetric span:last-child {
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.forestDbSyncCacheActions {
+  display: grid;
+  gap: 6px;
+}
+
+.forestDbSyncOperationsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f4f7f2;
+}
+
+.forestDbSyncWarnings {
+  display: grid;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.forestDbSyncWarning {
+  padding: 7px 8px;
+  border: 1px solid #e0c36d;
+  border-radius: 6px;
+  color: #5c4a13;
+  background: #fff8dc;
+  font-size: 12px;
+}
+
+.forestDbSyncCacheRepair {
+  display: grid;
+  gap: 8px;
+}
+
+.forestDbSyncOperationsPanel > .forestDbSyncCacheRepair {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #fffdf7;
+}
+
+.forestDbSyncCacheCard {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #d4a331;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.forestDbSyncCacheCard.healthy {
+  border-left-color: var(--brand);
+}
+
+.forestDbSyncCacheCardHeader {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.forestDbSyncCacheCardHeader strong {
+  font-size: 13px;
+}
+
+.forestDbSyncCacheCardHeader span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestDbSyncCacheJob {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestDbSyncCacheJob.running {
+  border-color: #b7cfc6;
+}
+
+.forestDbSyncCacheJob strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.forestDbSyncProgress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6ece8;
+}
+
+.forestDbSyncProgress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+}
+
+.forestDbSyncCacheControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.forestDbSyncCacheControls label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.forestDbSyncCacheRows {
+  display: grid;
+  gap: 6px;
+  max-height: min(48vh, 520px);
+  overflow: auto;
+}
+
+.forestDbSyncCacheRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcf8;
+  font-size: 11px;
+}
+
+.forestDbSyncCacheRow strong,
+.forestDbSyncCacheRow span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.forestDbSyncCacheRow strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.forestDbSyncCacheRow span {
+  color: var(--muted);
+}
+
+.forestDbSyncOperations {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
+  overflow: auto;
+}
+
+.forestDbSyncOperation {
+  display: grid;
+  grid-template-columns: minmax(120px, 170px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #97a9a4;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.forestDbSyncOperation.safe {
+  border-left-color: var(--brand);
+}
+
+.forestDbSyncOperation.conflict {
+  border-left-color: #b84936;
+}
+
+.forestDbSyncOperation.report-only {
+  border-left-color: #d4a331;
+}
+
+.forestDbSyncOperation.missing-cache {
+  background: #fbfaf2;
+}
+
+.forestDbSyncOperation strong,
+.forestDbSyncOperation span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.forestDbSyncOperation strong {
+  display: block;
+  font-size: 12px;
+}
+
+.forestDbSyncOperation span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.forestDbSyncBadge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #fff;
+  background: #788884;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.forestDbSyncBadge.safe {
+  background: var(--brand);
+}
+
+.forestDbSyncBadge.conflict {
+  background: #b84936;
+}
+
+.forestDbSyncBadge.report-only {
+  background: #a37618;
+}
+
+.forestDbSyncApplyResult {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  background: #fbfcf8;
 }
 
 .forestValidation {
@@ -1831,6 +2224,10 @@ textarea {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
     height: auto;
+  }
+
+  .shell.contextFocus {
+    grid-template-rows: 1fr;
   }
 
   .sidebar {

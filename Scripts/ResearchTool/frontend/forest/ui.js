@@ -1,21 +1,25 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-iter2-24";
+import { clearForestLayers, renderForestMap } from "./map.js?v=forest-db-sync-7";
 import {
   analyzeHansen,
+  applyDbSync,
   cancelForestJob,
+  compareDbSync,
   downloadSentinel,
   exportForestSamples,
   getForestSample,
   getForestJob,
   importForestFiles,
   listForestSamples,
+  listDbSyncCandidates,
   saveManualValidation,
   saveSampleDisplayName,
   saveSampleFlags,
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
-} from "./samples.js?v=forest-iter2-24";
-import { forestState } from "./state.js?v=forest-iter2-24";
+  startSentinelCacheDownload,
+} from "./samples.js?v=forest-db-sync-7";
+import { forestState } from "./state.js?v=forest-db-sync-7";
 
 function $(id) {
   return document.getElementById(id);
@@ -356,7 +360,7 @@ function renderSclLegendItems(host, legend) {
 
 function sclPreviewSignature(previews) {
   return previews
-    .filter((preview) => preview?.view === "scl" && preview.url)
+    .filter((preview) => preview?.view === "scl" && previewHasImage(preview))
     .map((preview) => preview.url)
     .sort()
     .join("|");
@@ -372,7 +376,7 @@ function currentSclLegendPreviews(hostId) {
 function renderSclLegend(hostId = "forestSclLegend", previews = []) {
   const host = $(hostId);
   if (!host) return;
-  const sclPreviews = previews.filter((preview) => preview?.view === "scl" && preview.url);
+  const sclPreviews = previews.filter((preview) => preview?.view === "scl" && previewHasImage(preview));
   if (!sclPreviews.length) {
     host.hidden = true;
     host.innerHTML = "";
@@ -456,6 +460,16 @@ function toggleSidebar() {
   window.setTimeout(() => window.pipelineExplorer?.refreshMapLayout(), 220);
 }
 
+function updateWorkspaceFocus() {
+  const shell = document.querySelector(".shell");
+  if (!shell) return;
+  shell.classList.toggle("contextFocus", Boolean(forestState.dbSyncOpen || forestState.compareOpen));
+  window.setTimeout(() => {
+    window.pipelineExplorer?.refreshMapLayout();
+    Object.values(forestState.compareMaps || {}).forEach((map) => map?.invalidateSize());
+  }, 220);
+}
+
 function enhanceSidebarPanels() {
   document.querySelectorAll(".sidebar > .panel").forEach((panel) => {
     if (panel.dataset.collapsibleReady) return;
@@ -503,6 +517,7 @@ async function setMode(mode) {
   $("pipelineModeBtn").classList.toggle("active", mode === "pipeline");
 
   if (mode === "pipeline") {
+    closeDbSyncView();
     clearForestLayers();
     if (!window.pipelineExplorer?.state?.kml) {
       await window.pipelineExplorer?.run(window.pipelineExplorer.loadDefaultKml);
@@ -812,18 +827,27 @@ function filteredSentinelDownloads(sample) {
   return downloads.filter((download) => sentinelImageIdMatches(download, query));
 }
 
+function previewHasImage(preview) {
+  return Boolean(preview?.url) && preview.cache_exists !== false;
+}
+
 function previewButton({ preview, download, className = "", downloadKey = "" }) {
-  const active = forestState.activeSentinelPreview?.url === preview.url;
+  const hasImage = previewHasImage(preview);
+  const active = hasImage && forestState.activeSentinelPreview?.url === preview.url;
   const date = download.datetime ? download.datetime.slice(0, 10) : "";
   const cloud = download.cloud_fraction === null || download.cloud_fraction === undefined
     ? "cloud n/a"
     : `cloud ${Math.round(Number(download.cloud_fraction) * 100)}%`;
   return `
-    <button class="forestPreviewCard ${className} ${active ? "active" : ""}" type="button" data-preview-url="${escapeHtml(preview.url || "")}" data-download-key="${escapeHtml(downloadKey)}">
-      <img src="${escapeHtml(preview.url || "")}" alt="${escapeHtml(sentinelViewLabel(preview.view))}" />
+    <button class="forestPreviewCard ${className} ${active ? "active" : ""} ${hasImage ? "" : "missingCache"}" type="button" data-preview-url="${escapeHtml(preview.url || "")}" data-download-key="${escapeHtml(downloadKey)}" ${hasImage ? "" : "disabled"}>
+      ${
+        hasImage
+          ? `<img src="${escapeHtml(preview.url)}" alt="${escapeHtml(sentinelViewLabel(preview.view))}" />`
+          : `<span class="forestPreviewMissingThumb">missing</span>`
+      }
       <span class="forestPreviewText">
         <strong>${escapeHtml(sentinelViewLabel(preview.view))}</strong>
-        <span>${escapeHtml(date)} / ${escapeHtml(cloud)}</span>
+        <span>${escapeHtml(date)} / ${escapeHtml(cloud)}${hasImage ? "" : " / missing cache"}</span>
       </span>
     </button>
   `;
@@ -846,7 +870,7 @@ function renderSentinelDownloadRow(download) {
     return `<div class="forestPreviewEmpty">${escapeHtml(download.datetime?.slice(0, 10) || "no date")}</div>`;
   }
 
-  const secondaryPreviews = previews.filter((preview) => preview.url !== primary.url);
+  const secondaryPreviews = previews.filter((preview) => preview !== primary);
   return `
     <article class="forestPreviewRow ${excluded ? "excluded" : ""}">
       <div class="forestPreviewReviewBar">
@@ -930,17 +954,19 @@ function bboxToBounds(bbox) {
 
 function compareDownloads(sample, period) {
   return (sample?.sentinel?.downloads || [])
-    .filter((download) => download.period === period && (download.previews || []).length)
+    .filter((download) => download.period === period && (download.previews || []).some(previewHasImage))
     .sort((left, right) => String(left.datetime || "").localeCompare(String(right.datetime || "")));
 }
 
 function previewForView(download, view) {
-  return (download?.previews || []).find((preview) => preview.view === view) || null;
+  return (download?.previews || []).find((preview) => preview.view === view && previewHasImage(preview)) || null;
 }
 
 function availableCompareViews(sample) {
   const downloads = [...compareDownloads(sample, "PRE"), ...compareDownloads(sample, "POST")];
-  const views = new Set(downloads.flatMap((download) => (download.previews || []).map((preview) => preview.view)));
+  const views = new Set(downloads.flatMap((download) =>
+    (download.previews || []).filter(previewHasImage).map((preview) => preview.view),
+  ));
   return SENTINEL_VIEW_ORDER.filter((view) => views.has(view));
 }
 
@@ -1223,10 +1249,12 @@ function openCompareView() {
     setForestStatus("Need at least one PRE and one POST Sentinel image");
     return;
   }
+  closeDbSyncView({ silent: true });
   forestState.compareOpen = true;
   ensureCompareSelections(sample);
   $("forestCompareView").hidden = false;
   renderCompareView();
+  updateWorkspaceFocus();
   setForestStatus("PRE/POST compare opened");
 }
 
@@ -1235,6 +1263,7 @@ function closeCompareView(options = {}) {
   forestState.compareSclPreviews = [];
   const compare = $("forestCompareView");
   if (compare) compare.hidden = true;
+  updateWorkspaceFocus();
   if (!options.silent) setForestStatus("PRE/POST compare closed");
 }
 
@@ -1278,6 +1307,428 @@ function bindCompareControls() {
   };
 }
 
+function dbSyncStatus(message) {
+  const host = $("forestDbSyncStatus");
+  if (host) host.textContent = message;
+  forestState.dbSyncStatus = message;
+}
+
+function operationStatusClass(operation) {
+  if (operation.status === "conflict") return "conflict";
+  if (operation.status === "report-only") return "report-only";
+  if (operation.safe) return "safe";
+  return "";
+}
+
+function renderDbSyncCandidates() {
+  const select = $("forestDbSyncCandidateSelect");
+  if (!select) return;
+  select.innerHTML = "";
+  if (!forestState.dbSyncCandidates.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No .sqlite files in bases/";
+    select.appendChild(option);
+    forestState.dbSyncSelectedPath = "";
+    return;
+  }
+
+  forestState.dbSyncCandidates.forEach((candidate) => {
+    const option = document.createElement("option");
+    option.value = candidate.path;
+    option.textContent = `${candidate.name} (${Math.round((candidate.size_bytes || 0) / 1024)} KiB)`;
+    select.appendChild(option);
+  });
+  if (!forestState.dbSyncSelectedPath) {
+    forestState.dbSyncSelectedPath = forestState.dbSyncCandidates[0].path;
+  }
+  select.value = forestState.dbSyncSelectedPath;
+}
+
+function renderDbSyncSummary(plan = forestState.dbSyncPlan) {
+  const host = $("forestDbSyncSummary");
+  if (!host) return;
+  if (!plan) {
+    host.innerHTML = `<div class="emptyState">Run compare to see DB differences.</div>`;
+    return;
+  }
+
+  const rows = Object.entries(plan.summary || {})
+    .filter(([entity]) => entity !== "cache_diagnostics");
+  if (!rows.length) {
+    host.innerHTML = `<div class="emptyState">No DB merge entities found.</div>`;
+    return;
+  }
+
+  host.innerHTML = rows
+    .map(([entity, metrics]) => {
+      const metricRows = Object.entries(metrics)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => `
+          <div class="forestDbSyncMetric">
+            <span>${escapeHtml(key)}</span>
+            <span>${escapeHtml(value)}</span>
+          </div>
+        `)
+        .join("");
+      return `
+        <article class="forestDbSyncSummaryCard">
+          <strong>${escapeHtml(entity.replaceAll("_", " "))}</strong>
+          <div class="forestDbSyncMetricGrid">${metricRows}</div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function dbSyncSentinelCache(plan = forestState.dbSyncPlan) {
+  return plan?.cache_repair?.sentinel || { items: [] };
+}
+
+function dbSyncSentinelItems(plan = forestState.dbSyncPlan) {
+  return dbSyncSentinelCache(plan).items || [];
+}
+
+function resetDbSyncSentinelSelection(plan = forestState.dbSyncPlan) {
+  const ids = dbSyncSentinelItems(plan).map((item) => item.download_id);
+  forestState.dbSyncSelectedSentinelDownloadIds = new Set(ids);
+  forestState.dbSyncSentinelCacheExpanded = ids.length > 0;
+}
+
+function pruneDbSyncSentinelSelection(items) {
+  const validIds = new Set(items.map((item) => item.download_id));
+  forestState.dbSyncSelectedSentinelDownloadIds = new Set(
+    [...forestState.dbSyncSelectedSentinelDownloadIds].filter((id) => validIds.has(id)),
+  );
+}
+
+function renderDbSyncSentinelJob(job = forestState.dbSyncSentinelJob) {
+  if (!job) return "";
+  const total = Number(job.total || 0);
+  const done = Number(job.done || 0);
+  const percent = total ? Math.round((done / total) * 100) : 0;
+  const running = !isTerminalJobStatus(job.status);
+  return `
+    <div class="forestDbSyncCacheJob ${running ? "running" : ""}">
+      <div>
+        <strong>${escapeHtml(job.status)}</strong>
+        <span>${escapeHtml(job.message || "")}</span>
+      </div>
+      <div class="forestDbSyncProgress" aria-label="Sentinel cache progress">
+        <span style="width:${Math.max(0, Math.min(100, percent))}%"></span>
+      </div>
+      <span>${escapeHtml(done)} / ${escapeHtml(total)}</span>
+      ${running ? `<button type="button" data-db-sync-cancel-sentinel-cache>Cancel</button>` : ""}
+    </div>
+  `;
+}
+
+function renderDbSyncCacheRepair(plan = forestState.dbSyncPlan) {
+  const host = $("forestDbSyncCacheRepair");
+  if (!host) return;
+  if (!plan) {
+    host.innerHTML = `<div class="emptyState">Run compare to inspect cache repair actions.</div>`;
+    return;
+  }
+
+  const sentinel = dbSyncSentinelCache(plan);
+  const items = dbSyncSentinelItems(plan);
+  pruneDbSyncSentinelSelection(items);
+  const selectedIds = forestState.dbSyncSelectedSentinelDownloadIds;
+  const running = forestState.dbSyncSentinelJob && !isTerminalJobStatus(forestState.dbSyncSentinelJob.status);
+  const selectedCount = selectedIds.size;
+  const allSelected = items.length > 0 && items.every((item) => selectedIds.has(item.download_id));
+  const visibleItems = items.slice(0, 250);
+  const hiddenCount = Math.max(0, items.length - visibleItems.length);
+
+  if (!items.length) {
+    host.innerHTML = `
+      <article class="forestDbSyncCacheCard healthy">
+        <div class="forestDbSyncCacheCardHeader">
+          <strong>Sentinel cache</strong>
+          <span>No missing Sentinel downloads.</span>
+        </div>
+        ${renderDbSyncSentinelJob()}
+      </article>
+    `;
+    return;
+  }
+
+  host.innerHTML = `
+    <article class="forestDbSyncCacheCard">
+      <button class="forestDbSyncCacheCardHeader" type="button" data-db-sync-toggle-sentinel-cache>
+        <strong>${escapeHtml(sentinel.missing_download_count || 0)} Sentinel downloads missing</strong>
+        <span>${escapeHtml(sentinel.missing_preview_row_count || 0)} preview rows / ${escapeHtml(items.length)} affected downloads</span>
+      </button>
+      ${renderDbSyncSentinelJob()}
+      ${forestState.dbSyncSentinelCacheExpanded ? `
+        <div class="forestDbSyncCacheControls">
+          <label>
+            <input id="forestDbSyncSentinelSelectAll" type="checkbox" ${allSelected ? "checked" : ""} />
+            Select all
+          </label>
+          <span>${escapeHtml(selectedCount)} selected</span>
+          <button id="forestDbSyncDownloadSentinelCacheBtn" class="primary" type="button" ${selectedCount && !running ? "" : "disabled"}>Download Sentinel</button>
+        </div>
+        <div class="forestDbSyncCacheRows">
+          ${visibleItems.map((item) => `
+            <label class="forestDbSyncCacheRow">
+              <input type="checkbox" data-db-sync-sentinel-download-id="${escapeHtml(item.download_id)}" ${selectedIds.has(item.download_id) ? "checked" : ""} ${running ? "disabled" : ""} />
+              <span>
+                <strong>${escapeHtml(item.period || "n/a")} / ${escapeHtml((item.datetime || "").slice(0, 10) || "no date")}</strong>
+                <span>${escapeHtml(item.sample_name || item.sample_short_id || item.sample_id)} / ${escapeHtml(item.scene_id)}</span>
+              </span>
+              <span>${item.missing_geotiff ? "GeoTIFF" : "previews"}${item.missing_preview_count ? ` + ${escapeHtml(item.missing_preview_count)} previews` : ""}</span>
+            </label>
+          `).join("")}
+          ${hiddenCount ? `<div class="emptyState">${hiddenCount} more affected downloads hidden.</div>` : ""}
+        </div>
+      ` : ""}
+    </article>
+  `;
+
+  host.querySelector("[data-db-sync-toggle-sentinel-cache]")?.addEventListener("click", () => {
+    forestState.dbSyncSentinelCacheExpanded = !forestState.dbSyncSentinelCacheExpanded;
+    renderDbSyncCacheRepair();
+  });
+  host.querySelector("#forestDbSyncSentinelSelectAll")?.addEventListener("change", (event) => {
+    forestState.dbSyncSelectedSentinelDownloadIds = event.target.checked
+      ? new Set(items.map((item) => item.download_id))
+      : new Set();
+    renderDbSyncCacheRepair();
+  });
+  host.querySelectorAll("[data-db-sync-sentinel-download-id]").forEach((checkbox) => {
+    checkbox.addEventListener("change", (event) => {
+      const downloadId = event.target.dataset.dbSyncSentinelDownloadId;
+      if (!downloadId) return;
+      if (event.target.checked) {
+        forestState.dbSyncSelectedSentinelDownloadIds.add(downloadId);
+      } else {
+        forestState.dbSyncSelectedSentinelDownloadIds.delete(downloadId);
+      }
+      renderDbSyncCacheRepair();
+    });
+  });
+  host.querySelector("#forestDbSyncDownloadSentinelCacheBtn")?.addEventListener("click", () => run(runDbSyncSentinelCacheDownload));
+  host.querySelector("[data-db-sync-cancel-sentinel-cache]")?.addEventListener("click", () => run(cancelDbSyncSentinelCacheJob));
+}
+
+function renderDbSyncWarnings(plan = forestState.dbSyncPlan) {
+  const host = $("forestDbSyncWarnings");
+  if (!host) return;
+  const warnings = plan?.warnings || [];
+  host.innerHTML = warnings
+    .map((warning) => `<div class="forestDbSyncWarning">${escapeHtml(warning)}</div>`)
+    .join("");
+}
+
+function renderDbSyncOperations(plan = forestState.dbSyncPlan) {
+  const host = $("forestDbSyncOperations");
+  const totalsHost = $("forestDbSyncTotals");
+  const applyButton = $("forestDbSyncApplyBtn");
+  if (!host || !totalsHost || !applyButton) return;
+  if (!plan) {
+    host.innerHTML = `<div class="emptyState">No operations yet.</div>`;
+    totalsHost.textContent = "no compare yet";
+    applyButton.disabled = true;
+    return;
+  }
+
+  const totals = plan.totals || {};
+  const diagnosticTotals = plan.diagnostic_totals || {};
+  totalsHost.textContent =
+    `${totals.safe || 0} safe / ${totals.conflicts || 0} conflicts / ${totals.report_only || 0} report-only / ${diagnosticTotals.operations || 0} cache diagnostics`;
+  applyButton.disabled = forestState.dbSyncRunning || !Number(totals.safe || 0);
+
+  const operations = plan.operations || [];
+  if (!operations.length) {
+    host.innerHTML = `<div class="emptyState">No DB merge differences found.</div>`;
+    return;
+  }
+
+  const visible = operations.slice(0, 350);
+  const hiddenCount = Math.max(0, operations.length - visible.length);
+  host.innerHTML = visible
+    .map((operation) => {
+      const statusClass = operationStatusClass(operation);
+      const classes = [
+        "forestDbSyncOperation",
+        statusClass,
+        operation.missing_cache ? "missing-cache" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `
+        <article class="${classes}">
+          <div>
+            <strong>${escapeHtml(operation.entity)}</strong>
+            <span>${escapeHtml(operation.action)}</span>
+          </div>
+          <div>
+            <strong>${escapeHtml(operation.key)}</strong>
+            <span>${escapeHtml(operation.message)}</span>
+            ${operation.field ? `<span>field: ${escapeHtml(operation.field)}</span>` : ""}
+            ${operation.missing_cache ? `<span>missing cache</span>` : ""}
+          </div>
+          <span class="forestDbSyncBadge ${statusClass}">${escapeHtml(operation.status)}</span>
+        </article>
+      `;
+    })
+    .join("")
+    + (hiddenCount ? `<div class="emptyState">${hiddenCount} more operations hidden in UI; report will contain all.</div>` : "");
+}
+
+function renderDbSyncApplyResult(result = forestState.dbSyncApplyResult) {
+  const host = $("forestDbSyncApplyResult");
+  if (!host) return;
+  if (!result) {
+    host.innerHTML = "";
+    return;
+  }
+  const reports = result.reports || {};
+  host.innerHTML = `
+    <strong>Applied ${escapeHtml(result.applied_count || 0)} operations; skipped ${escapeHtml(result.skipped_count || 0)}.</strong>
+    <span>Backup: ${escapeHtml(result.backup_path || "n/a")}</span>
+    <span>Summary: ${escapeHtml(reports.summary || "n/a")}</span>
+    <span>Operations: ${escapeHtml(reports.operations || "n/a")}</span>
+    <span>Conflicts: ${escapeHtml(reports.conflicts || "n/a")}</span>
+    <span>Diagnostics: ${escapeHtml(reports.diagnostics || "n/a")}</span>
+  `;
+}
+
+function renderDbSyncView() {
+  renderDbSyncCandidates();
+  renderDbSyncSummary();
+  renderDbSyncCacheRepair();
+  renderDbSyncWarnings();
+  renderDbSyncOperations();
+  renderDbSyncApplyResult();
+  dbSyncStatus(forestState.dbSyncStatus || "Select incoming SQLite database.");
+}
+
+async function loadDbSyncCandidates() {
+  dbSyncStatus("loading DB candidates");
+  const payload = await listDbSyncCandidates();
+  forestState.dbSyncCandidates = payload.items || [];
+  if (
+    forestState.dbSyncSelectedPath
+    && !forestState.dbSyncCandidates.some((candidate) => candidate.path === forestState.dbSyncSelectedPath)
+  ) {
+    forestState.dbSyncSelectedPath = "";
+  }
+  renderDbSyncCandidates();
+  dbSyncStatus(`found ${forestState.dbSyncCandidates.length} candidate DB(s)`);
+}
+
+async function openDbSyncView() {
+  closeCompareView({ silent: true });
+  forestState.dbSyncOpen = true;
+  $("forestDbSyncView").hidden = false;
+  updateWorkspaceFocus();
+  renderDbSyncView();
+  if (!forestState.dbSyncCandidates.length) {
+    await loadDbSyncCandidates();
+  }
+  window.pipelineExplorer?.refreshMapLayout();
+}
+
+function closeDbSyncView(options = {}) {
+  forestState.dbSyncOpen = false;
+  const view = $("forestDbSyncView");
+  if (view) view.hidden = true;
+  updateWorkspaceFocus();
+  if (!options.silent) setForestStatus("Database Sync closed");
+}
+
+async function runDbSyncCompare() {
+  const path = $("forestDbSyncCandidateSelect").value;
+  if (!path) {
+    dbSyncStatus("select incoming DB first");
+    return;
+  }
+  forestState.dbSyncSelectedPath = path;
+  forestState.dbSyncRunning = true;
+  forestState.dbSyncApplyResult = null;
+  renderDbSyncOperations();
+  dbSyncStatus("comparing databases");
+  try {
+    forestState.dbSyncPlan = await compareDbSync(path);
+    resetDbSyncSentinelSelection(forestState.dbSyncPlan);
+    dbSyncStatus(`compare ready: ${forestState.dbSyncPlan.totals.safe || 0} safe operation(s)`);
+  } finally {
+    forestState.dbSyncRunning = false;
+    renderDbSyncView();
+  }
+}
+
+async function runDbSyncApply() {
+  const path = forestState.dbSyncSelectedPath || $("forestDbSyncCandidateSelect").value;
+  if (!path) {
+    dbSyncStatus("select incoming DB first");
+    return;
+  }
+  forestState.dbSyncRunning = true;
+  renderDbSyncOperations();
+  dbSyncStatus("applying safe DB sync operations");
+  try {
+    forestState.dbSyncApplyResult = await applyDbSync(path);
+    forestState.dbSyncPlan = await compareDbSync(path);
+    dbSyncStatus(`apply ready: ${forestState.dbSyncApplyResult.applied_count || 0} operation(s)`);
+    if (forestState.selectedSampleId) {
+      forestState.selectedDetail = await getForestSample(forestState.selectedSampleId);
+      ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
+      renderDetail();
+      renderMap();
+    }
+    await refreshSamples();
+  } finally {
+    forestState.dbSyncRunning = false;
+    renderDbSyncView();
+  }
+}
+
+async function runDbSyncSentinelCacheDownload() {
+  const items = dbSyncSentinelItems();
+  const validIds = new Set(items.map((item) => item.download_id));
+  const selectedIds = [...forestState.dbSyncSelectedSentinelDownloadIds].filter((id) => validIds.has(id));
+  if (!selectedIds.length) {
+    dbSyncStatus("select Sentinel downloads first");
+    return;
+  }
+  dbSyncStatus(`queueing ${selectedIds.length} Sentinel cache download(s)`);
+  forestState.dbSyncSentinelJob = await startSentinelCacheDownload(selectedIds, { max_cloud: 30 });
+  forestState.dbSyncSentinelJobId = forestState.dbSyncSentinelJob.job_id;
+  window.clearTimeout(forestState.dbSyncSentinelTimer);
+  forestState.dbSyncSentinelTimer = window.setTimeout(() => run(pollDbSyncSentinelCacheJob), 700);
+  renderDbSyncCacheRepair();
+}
+
+async function pollDbSyncSentinelCacheJob() {
+  if (!forestState.dbSyncSentinelJobId) return;
+  const job = await getForestJob(forestState.dbSyncSentinelJobId);
+  forestState.dbSyncSentinelJob = job;
+  dbSyncStatus(job.message || `Sentinel cache ${job.status}`);
+  renderDbSyncCacheRepair();
+  if (isTerminalJobStatus(job.status)) {
+    window.clearTimeout(forestState.dbSyncSentinelTimer);
+    forestState.dbSyncSentinelTimer = null;
+    forestState.dbSyncSentinelJobId = null;
+    if (forestState.dbSyncSelectedPath) {
+      forestState.dbSyncPlan = await compareDbSync(forestState.dbSyncSelectedPath);
+      resetDbSyncSentinelSelection(forestState.dbSyncPlan);
+      renderDbSyncView();
+    }
+    return;
+  }
+  forestState.dbSyncSentinelTimer = window.setTimeout(() => run(pollDbSyncSentinelCacheJob), 1500);
+}
+
+async function cancelDbSyncSentinelCacheJob() {
+  if (!forestState.dbSyncSentinelJobId) return;
+  forestState.dbSyncSentinelJob = await cancelForestJob(forestState.dbSyncSentinelJobId);
+  renderDbSyncCacheRepair();
+}
+
 function allDownloadedPreviews(sample) {
   return (sample?.sentinel?.downloads || []).flatMap((download) =>
     (download.previews || []).map((preview) => ({
@@ -1300,7 +1751,7 @@ function findPreviewByUrl(previewUrl) {
 
 function chooseDefaultSentinelPreview(sample) {
   const previews = allDownloadedPreviews(sample);
-  const usable = previews.filter((preview) => !preview.is_excluded);
+  const usable = previews.filter((preview) => previewHasImage(preview) && !preview.is_excluded);
   return usable.find((preview) => preview.view === "rgb") || usable[0] || null;
 }
 
@@ -1608,6 +2059,23 @@ function renderDetail() {
 }
 
 function bindSentinelDownloadControls() {
+  document.querySelectorAll(".forestPreviewCard img").forEach((image) => {
+    image.addEventListener("error", () => {
+      const card = image.closest(".forestPreviewCard");
+      if (card) {
+        card.classList.add("missingCache");
+        card.disabled = true;
+      }
+      const missing = document.createElement("span");
+      missing.className = "forestPreviewMissingThumb";
+      missing.textContent = "missing";
+      image.replaceWith(missing);
+      if (forestState.activeSentinelPreview?.url === image.getAttribute("src")) {
+        forestState.activeSentinelPreview = null;
+        renderMap();
+      }
+    }, { once: true });
+  });
   document.querySelectorAll(".forestPreviewCard").forEach((button) => {
     button.addEventListener("click", () => {
       const preview = findPreviewByUrl(button.dataset.previewUrl);
@@ -1736,6 +2204,10 @@ async function selectSample(sampleId, options = {}) {
     sample_id: sampleId,
     active_card: Boolean($("forestSamplesList").querySelector(".forestSampleCard.active")),
     pinned: Boolean($("forestSamplesList").querySelector(".forestSampleCard.pinned")),
+    active_preview_view: forestState.activeSentinelPreview?.view || null,
+    active_preview_url: forestState.activeSentinelPreview?.url || null,
+    active_preview_cache: forestState.activeSentinelPreview?.cache_exists ?? null,
+    active_preview_bbox: Boolean(forestState.activeSentinelPreview?.bbox),
   });
   setForestStatus("sample selected");
 }
@@ -2155,6 +2627,23 @@ function bindEvents() {
     run(() => refreshSamples());
   });
   $("forestExportBtn").addEventListener("click", () => run(createExport));
+  $("forestDbSyncOpenBtn").addEventListener("click", () => run(openDbSyncView));
+  $("forestDbSyncCloseBtn").addEventListener("click", closeDbSyncView);
+  $("forestDbSyncRefreshBtn").addEventListener("click", () => run(loadDbSyncCandidates));
+  $("forestDbSyncCompareBtn").addEventListener("click", () => run(runDbSyncCompare));
+  $("forestDbSyncApplyBtn").addEventListener("click", () => run(runDbSyncApply));
+  $("forestDbSyncCandidateSelect").addEventListener("change", (event) => {
+    forestState.dbSyncSelectedPath = event.target.value;
+    forestState.dbSyncPlan = null;
+    forestState.dbSyncApplyResult = null;
+    forestState.dbSyncSelectedSentinelDownloadIds = new Set();
+    forestState.dbSyncSentinelCacheExpanded = false;
+    forestState.dbSyncSentinelJob = null;
+    forestState.dbSyncSentinelJobId = null;
+    window.clearTimeout(forestState.dbSyncSentinelTimer);
+    forestState.dbSyncSentinelTimer = null;
+    renderDbSyncView();
+  });
   $("forestBatchHansenBtn").addEventListener("click", () => run(startBatchHansen));
   $("forestBatchTreecoverInput").addEventListener("change", (event) => {
     forestState.includeBatchHansenTreecover = event.target.checked;

@@ -15,6 +15,12 @@ from sqlalchemy.orm import Session
 
 from ..config import FOREST_EXPORTS_DIR
 from .database import SessionLocal, get_db
+from .db_sync_service import (
+    DbSyncError,
+    apply_db_sync_plan,
+    build_db_sync_plan,
+    candidate_databases,
+)
 from .geometry import DEFAULT_SAMPLE_PLOT_M, DEFAULT_VIEWER_AOI_M, haversine_m, sample_geometries
 from .hansen_service import analyze_sample_hansen, latest_hansen_payload
 from .import_service import import_file
@@ -33,6 +39,7 @@ from .models import (
 from .sentinel_service import (
     download_sentinel_for_sample,
     latest_sentinel_payload,
+    restore_sentinel_download_cache,
     search_sentinel_for_sample,
     sentinel_review_reason_payloads,
     sentinel_review_payload,
@@ -124,6 +131,20 @@ class HansenBatchRequest(BaseModel):
 class ExportRequest(BaseModel):
     scope: str = "current_filtered"
     filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class DbSyncCompareRequest(BaseModel):
+    incoming_path: str
+
+
+class DbSyncApplyRequest(BaseModel):
+    incoming_path: str
+    groups: list[str] | None = None
+
+
+class SentinelCacheDownloadJobRequest(BaseModel):
+    download_ids: list[str] = Field(default_factory=list)
+    max_cloud: float = Field(default=30.0, ge=0.0, le=100.0)
 
 
 def json_or_none(value: str | None) -> Any:
@@ -427,6 +448,77 @@ def run_hansen_batch_job(job_id: str, sample_ids: list[str], include_treecover: 
             stage="done",
             done=len(sample_ids),
             message=f"Done: {len(sample_ids) - failed} ok, {failed} failed",
+        )
+    except Exception as exc:
+        db.rollback()
+        jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
+def run_sentinel_cache_download_job(job_id: str, download_ids: list[str], max_cloud: float) -> None:
+    db = SessionLocal()
+    failed = 0
+    try:
+        jobs.update(
+            job_id,
+            status="running",
+            stage="loading",
+            total=len(download_ids),
+            message="Sentinel cache restore started",
+        )
+        for index, download_id in enumerate(download_ids, start=1):
+            job = jobs.get(job_id)
+            if job and job.cancel_requested:
+                jobs.update(
+                    job_id,
+                    status="cancelled",
+                    stage="cancelled",
+                    done=index - 1,
+                    message=f"Cancelled after {index - 1}/{len(download_ids)} downloads",
+                )
+                return
+
+            download = db.get(SentinelDownload, download_id)
+            if download is None:
+                failed += 1
+                jobs.update(
+                    job_id,
+                    done=index,
+                    message=f"{download_id[:8]} missing in DB; failed {failed}",
+                )
+                continue
+
+            jobs.update(
+                job_id,
+                status="running",
+                stage="download",
+                done=index - 1,
+                message=f"{index}/{len(download_ids)} {download.period or ''} {download.scene_id[:70]}",
+            )
+            try:
+                restore_sentinel_download_cache(db, download, max_cloud=max_cloud)
+                jobs.update(
+                    job_id,
+                    done=index,
+                    message=f"Restored {download.download_id[:8]} ({index}/{len(download_ids)}); failed {failed}",
+                )
+            except Exception as exc:
+                failed += 1
+                db.rollback()
+                jobs.update(
+                    job_id,
+                    done=index,
+                    message=f"{download.download_id[:8]} failed: {str(exc)[:160]}",
+                )
+
+        final_status = "completed_with_errors" if failed else "completed"
+        jobs.update(
+            job_id,
+            status=final_status,
+            stage="done",
+            done=len(download_ids),
+            message=f"Done: {len(download_ids) - failed} ok, {failed} failed",
         )
     except Exception as exc:
         db.rollback()
@@ -749,6 +841,71 @@ def get_export(
         raise HTTPException(status_code=404, detail="Export file is missing on disk.")
     media_type = "text/csv" if format == "csv" else "application/geo+json"
     return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@router.get("/db-sync/candidates")
+def db_sync_candidates() -> dict[str, Any]:
+    try:
+        return candidate_databases()
+    except DbSyncError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/db-sync/compare")
+def db_sync_compare(
+    request: DbSyncCompareRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return build_db_sync_plan(db, request.incoming_path)
+    except DbSyncError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/db-sync/apply")
+def db_sync_apply(
+    request: DbSyncApplyRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return apply_db_sync_plan(db, request.incoming_path, request.groups)
+    except DbSyncError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/db-sync/cache/sentinel/download-job")
+def start_sentinel_cache_download_job(request: SentinelCacheDownloadJobRequest) -> dict[str, Any]:
+    download_ids = []
+    seen = set()
+    for raw_id in request.download_ids:
+        download_id = raw_id.strip()
+        if not download_id or download_id in seen:
+            continue
+        seen.add(download_id)
+        download_ids.append(download_id)
+    if not download_ids:
+        raise HTTPException(status_code=400, detail="download_ids must contain at least one id.")
+    if len(download_ids) > 500:
+        raise HTTPException(status_code=400, detail="At most 500 downloads can be queued at once.")
+
+    job = jobs.create(
+        "sentinel_cache_download",
+        total=len(download_ids),
+        message=f"Queued {len(download_ids)} Sentinel cache download(s)",
+    )
+    thread = threading.Thread(
+        target=run_sentinel_cache_download_job,
+        args=(job.job_id, download_ids, request.max_cloud),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
 
 
 @router.get("/jobs/{job_id}")

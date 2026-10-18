@@ -1,4 +1,4 @@
-import { api } from "./api.js?v=forest-iter2-24";
+import { api } from "./api.js?v=forest-db-sync-7";
 
 function cleanFilters(filters) {
   return Object.fromEntries(
@@ -103,6 +103,34 @@ export async function exportForestSamples(filters) {
     body: {
       scope: "current_filtered",
       filters: cleanFilters(filters),
+    },
+  });
+}
+
+export async function listDbSyncCandidates() {
+  return api("/api/forest/db-sync/candidates");
+}
+
+export async function compareDbSync(incomingPath) {
+  return api("/api/forest/db-sync/compare", {
+    method: "POST",
+    body: { incoming_path: incomingPath },
+  });
+}
+
+export async function applyDbSync(incomingPath, groups = null) {
+  return api("/api/forest/db-sync/apply", {
+    method: "POST",
+    body: { incoming_path: incomingPath, groups },
+  });
+}
+
+export async function startSentinelCacheDownload(downloadIds, options = {}) {
+  return api("/api/forest/db-sync/cache/sentinel/download-job", {
+    method: "POST",
+    body: {
+      download_ids: downloadIds,
+      max_cloud: Number(options.max_cloud ?? 30),
     },
   });
 }
