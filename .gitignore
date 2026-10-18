@@ -11,3 +11,6 @@ Specs
 Scripts/ResearchScripts/Outputs
 Scripts/ResearchScripts/Data/Images
 *.pt
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cache/
