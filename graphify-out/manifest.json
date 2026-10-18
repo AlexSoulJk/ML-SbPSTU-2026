@@ -378,10 +378,10 @@
     "semantic_hash": "69ba0c15f37ba35638bf2761470051a7"
   },
   "Scripts/ResearchTool/frontend/forest/map.js": {
-    "mtime": 1792328796.9878519,
-    "seen": 1792339884.7286935,
-    "ast_hash": "9d42775f52c9c3fd9f91df7a585b1b34",
-    "semantic_hash": "9d42775f52c9c3fd9f91df7a585b1b34"
+    "mtime": 1792344403.131002,
+    "seen": 1792357929.7444484,
+    "ast_hash": "c964f6ae29857d48ec21b07bfcf232e4",
+    "semantic_hash": "c964f6ae29857d48ec21b07bfcf232e4"
   },
   "Scripts/ResearchTool/frontend/forest/samples.js": {
     "mtime": 1792328796.863697,
@@ -396,10 +396,10 @@
     "semantic_hash": "461d4c754a5aa208e234e858864162fb"
   },
   "Scripts/ResearchTool/frontend/forest/ui.js": {
-    "mtime": 1792343715.5953276,
-    "seen": 1792343756.5479248,
-    "ast_hash": "dcd40dae847aa6d008f83c58a3d375f9",
-    "semantic_hash": "dcd40dae847aa6d008f83c58a3d375f9"
+    "mtime": 1792344428.3336105,
+    "seen": 1792357929.7454493,
+    "ast_hash": "777ffcc1d0f740190788c1eb8f148fb7",
+    "semantic_hash": "777ffcc1d0f740190788c1eb8f148fb7"
   },
   "Scripts/ResearchTool/run_hansen_batch.py": {
     "mtime": 1789841233.6501307,
@@ -474,10 +474,10 @@
     "semantic_hash": "b67b29771de3cf115cd30b7170065fe0"
   },
   "Scripts/ResearchTool/frontend/forest/data_operations.js": {
-    "mtime": 1792339676.979184,
-    "seen": 1792339884.7286935,
-    "ast_hash": "2b28ff5b564473b4c11f2879ac029c3d",
-    "semantic_hash": "2b28ff5b564473b4c11f2879ac029c3d"
+    "mtime": 1792344428.2012012,
+    "seen": 1792357929.7444484,
+    "ast_hash": "88212c078a13d2ef1ff5b3dfb298da48",
+    "semantic_hash": "88212c078a13d2ef1ff5b3dfb298da48"
   },
   "Scripts/ResearchTool/tests/test_data_operations.py": {
     "mtime": 1792339694.627844,
