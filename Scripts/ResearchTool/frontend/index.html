@@ -433,8 +433,8 @@
                   </select>
                 </label>
                 <label id="forestDataOperationsInventoryFileLabel" hidden>
-                  Inventory CSV
-                  <input id="forestDataOperationsInventoryFile" type="file" accept=".csv" />
+                  <span id="forestDataOperationsSourceFileText">Source file</span>
+                  <input id="forestDataOperationsInventoryFile" type="file" accept=".csv,.json" />
                 </label>
                 <label>
                   Profile
@@ -635,6 +635,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-event-fix-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-bundle-source-1"></script>
   </body>
 </html>

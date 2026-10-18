@@ -11,8 +11,8 @@ import {
   startMissingGeotiffInventory,
   startSentinelBatch,
   startSentinelBundle,
-  uploadMissingGeotiffInventory,
-} from "./samples.js?v=forest-data-ops-1";
+  uploadDataOperationSourceFile,
+} from "./samples.js?v=forest-bundle-source-1";
 import { forestState } from "./state.js?v=forest-event-fix-1";
 
 
@@ -34,6 +34,23 @@ function escapeHtml(value) {
 function numberValue(id, fallback) {
   const value = Number($(id)?.value);
   return Number.isFinite(value) ? value : fallback;
+}
+
+
+function updateBundleSourceFileControl() {
+  const source = $("forestDataOperationsBundleSource").value;
+  const label = $("forestDataOperationsInventoryFileLabel");
+  const input = $("forestDataOperationsInventoryFile");
+  const text = $("forestDataOperationsSourceFileText");
+  const needsFile = source === "missing_geotiff_csv" || source === "download_job_result";
+  label.hidden = !needsFile;
+  if (source === "download_job_result") {
+    text.textContent = "Batch selection JSON";
+    input.accept = ".json,application/json";
+  } else {
+    text.textContent = "Inventory CSV";
+    input.accept = ".csv,text/csv";
+  }
 }
 
 
@@ -391,6 +408,7 @@ export function initDataOperations(callbacks) {
   renderBundlePlan();
   renderImportPlan();
   renderTab();
+  updateBundleSourceFileControl();
 
   $("forestDataOperationsOpenBtn").addEventListener("click", () => callbacks.run(async () => {
     callbacks.closeCompareView({ silent: true });
@@ -469,7 +487,8 @@ export function initDataOperations(callbacks) {
     watchJob(job, callbacks);
   }));
   $("forestDataOperationsBundleSource").addEventListener("change", (event) => {
-    $("forestDataOperationsInventoryFileLabel").hidden = event.target.value !== "missing_geotiff_csv";
+    $("forestDataOperationsInventoryFile").value = "";
+    updateBundleSourceFileControl();
     forestState.dataOperationsBundlePlan = null;
     forestState.dataOperationsBundleSelectedIds = new Set();
     renderBundlePlan();
@@ -477,10 +496,16 @@ export function initDataOperations(callbacks) {
   $("forestDataOperationsInventoryFile").addEventListener("change", (event) => callbacks.run(async () => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const result = await uploadMissingGeotiffInventory(file);
-    forestState.dataOperationsInventoryPath = result.path;
-    forestState.dataOperationsInventoryName = result.name;
-    setStatus(`Inventory ready: ${result.name}`);
+    const source = $("forestDataOperationsBundleSource").value;
+    const result = await uploadDataOperationSourceFile(file);
+    if (source === "download_job_result") {
+      forestState.dataOperationsLastBatchSelectionPath = result.path;
+      setStatus(`Batch selection ready: ${result.name}`);
+    } else {
+      forestState.dataOperationsInventoryPath = result.path;
+      forestState.dataOperationsInventoryName = result.name;
+      setStatus(`Inventory ready: ${result.name}`);
+    }
   }));
   $("forestDataOperationsBundlePlanBtn").addEventListener("click", () => callbacks.run(async () => {
     const source = $("forestDataOperationsBundleSource").value;
@@ -494,8 +519,12 @@ export function initDataOperations(callbacks) {
         ? numberValue("forestDataOperationsBundleLimit", null)
         : null,
     };
-    if (source === "missing_geotiff_csv") payload.inventory_path = forestState.dataOperationsInventoryPath;
+    if (source === "missing_geotiff_csv") {
+      if (!forestState.dataOperationsInventoryPath) throw new Error("Choose the missing GeoTIFF inventory CSV first.");
+      payload.inventory_path = forestState.dataOperationsInventoryPath;
+    }
     if (source === "download_job_result") {
+      if (!forestState.dataOperationsLastBatchSelectionPath) throw new Error("Choose the batch bundle_selection.json first.");
       payload.selection_path = forestState.dataOperationsLastBatchSelectionPath;
     }
     setStatus("building bundle plan");

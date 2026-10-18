@@ -1436,14 +1436,27 @@ def get_missing_geotiff_artifact(job_id: str) -> FileResponse:
 
 
 @router.post("/data-operations/inventory/upload")
-async def upload_missing_geotiff_inventory(file: UploadFile = File(...)) -> dict[str, Any]:
+@router.post("/data-operations/source-file/upload")
+async def upload_data_operation_source_file(file: UploadFile = File(...)) -> dict[str, Any]:
     original_name = Path(file.filename or "missing_sentinel_geotiffs.csv").name
-    if Path(original_name).suffix.lower() != ".csv":
-        raise HTTPException(status_code=400, detail="A CSV inventory file is required.")
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in {".csv", ".json"}:
+        raise HTTPException(status_code=400, detail="A CSV inventory or batch selection JSON is required.")
+    content = await file.read()
+    if suffix == ".json":
+        try:
+            payload = json.loads(content.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="The batch selection JSON is invalid.") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("download_ids"), list):
+            raise HTTPException(
+                status_code=400,
+                detail="The batch selection JSON must contain a download_ids list.",
+            )
     target_dir = FOREST_IMPORTS_DIR / "data_operations"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{uuid.uuid4().hex[:10]}_{original_name}"
-    target.write_bytes(await file.read())
+    target.write_bytes(content)
     return {"path": str(target), "name": original_name, "bytes": target.stat().st_size}
 
 

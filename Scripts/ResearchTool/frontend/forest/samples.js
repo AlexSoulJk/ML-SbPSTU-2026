@@ -170,10 +170,10 @@ export async function startMissingGeotiffInventory() {
   });
 }
 
-export async function uploadMissingGeotiffInventory(file) {
+export async function uploadDataOperationSourceFile(file) {
   const form = new FormData();
   form.append("file", file);
-  return api("/api/forest/data-operations/inventory/upload", {
+  return api("/api/forest/data-operations/source-file/upload", {
     method: "POST",
     body: form,
   });

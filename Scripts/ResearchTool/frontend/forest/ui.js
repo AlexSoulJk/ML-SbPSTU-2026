@@ -1,5 +1,5 @@
 import { clearForestLayers, renderForestMap } from "./map.js?v=forest-event-fix-1";
-import { initDataOperations } from "./data_operations.js?v=forest-event-fix-1";
+import { initDataOperations } from "./data_operations.js?v=forest-bundle-source-1";
 import {
   analyzeHansen,
   applyDbSync,
@@ -18,7 +18,7 @@ import {
   searchSentinel,
   startHansenBatch,
   startSentinelCacheDownload,
-} from "./samples.js?v=forest-data-ops-1";
+} from "./samples.js?v=forest-bundle-source-1";
 import { forestState } from "./state.js?v=forest-event-fix-1";
 
 function $(id) {
