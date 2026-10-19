@@ -1,0 +1,7 @@
+-r ../../ResearchTool/requirements.txt
+scikit-learn>=1.5
+matplotlib>=3.9
+torch>=2.4
+open_clip_torch>=2.26
+jupyterlab>=4.2
+ipykernel>=6.29

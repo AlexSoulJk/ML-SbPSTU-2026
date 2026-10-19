@@ -1,89 +1,68 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
 import numpy as np
-import torch
-from PIL import Image
-from ml_tests.init_model import device, preprocess, model
+
+from .config import DEFAULT_CONFIG_PATH, load_config
+from .embeddings import RemoteClipEmbedder, l2_normalize
 
 
-def get_embedding(image_path: str) -> np.ndarray:
-    image = Image.open(image_path).convert("RGB")
-    image = preprocess(image).unsqueeze(0).to(device)
+_default_embedder: RemoteClipEmbedder | None = None
 
-    with torch.no_grad():
-        features = model.encode_image(image)
 
-        # cosine-friendly normalized embedding
-        features = features / features.norm(dim=-1, keepdim=True)
+def get_embedding(image_path: str | Path) -> np.ndarray:
+    global _default_embedder
+    if _default_embedder is None:
+        _default_embedder = RemoteClipEmbedder(load_config(DEFAULT_CONFIG_PATH))
+    return _default_embedder.encode(image_path)
 
-    return features.cpu().numpy()[0]
 
-def embedding_consistency_loo(embeddings):
-    X = np.stack(embeddings)
-
-    result = []
-
-    for i in range(len(X)):
-        if len(X) == 1:
+def embedding_consistency_loo(embeddings: list[np.ndarray]) -> np.ndarray:
+    values = np.stack(embeddings)
+    result: list[float] = []
+    for index in range(len(values)):
+        if len(values) == 1:
             result.append(np.nan)
             continue
+        center = l2_normalize(np.delete(values, index, axis=0).mean(axis=0))
+        result.append(float(np.dot(values[index], center)))
+    return np.asarray(result)
 
-        others = np.delete(X, i, axis=0)
 
-        center = others.mean(axis=0)
-        center /= np.linalg.norm(center)
+def aggregate_embeddings_by_sample_and_period(
+    embeddings_for_period: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    aggregate = l2_normalize(np.stack(embeddings_for_period).mean(axis=0))
+    return aggregate, embedding_consistency_loo(embeddings_for_period)
 
-        sim = float(np.dot(X[i], center))
-        result.append(sim)
 
-    return np.array(result)
+def calculate_cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+    return float(np.dot(l2_normalize(embedding1), l2_normalize(embedding2)))
 
-def aggregate_embeddings_by_sample_and_period(embeddings_for_period):
-    X = np.stack(embeddings_for_period)
-    z = X.mean(axis=0)
-    z /= np.linalg.norm(z)
-    similarities = embedding_consistency_loo(embeddings_for_period)
-    return z, similarities
 
-def calculate_cosine_similarity(embedding1, embedding2):
-    similarity = np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
-    return similarity
-    
-def get_butch_embeddings(images_info_grouped):
-    embeddings_pre = []
-    embeddings_post = []
-    labels_pre = []
-    labels_post = []
-    statistic_info = {"cosine_similarity_at_one_point": {}}
+def get_butch_embeddings(
+    images_info_grouped: dict[str, dict[str, list[dict[str, Any]]]],
+):
+    embeddings_pre: list[np.ndarray] = []
+    embeddings_post: list[np.ndarray] = []
+    labels_pre: list[str] = []
+    labels_post: list[str] = []
+    statistic_info: dict[str, Any] = {"cosine_similarity_at_one_point": {}}
     for sample_id, periods in images_info_grouped.items():
-        sample_statistic = statistic_info["cosine_similarity_at_one_point"].get(sample_id, None)
-        
-        if sample_statistic is None:
-            statistic_info["cosine_similarity_at_one_point"][sample_id] = {}
-            
+        statistic_info["cosine_similarity_at_one_point"][sample_id] = {}
         for period, images in periods.items():
-            embeddings_for_period = []
-            
-            sample_statistic_period = statistic_info["cosine_similarity_at_one_point"][sample_id].get(period, None)
-                    
-            if sample_statistic_period is None:
-                statistic_info["cosine_similarity_at_one_point"][sample_id][period] = {}
-            
-            for image in images:
-                embedding = get_embedding(image["path"])
-                embeddings_for_period.append(embedding)
-            
-            aggregate_embedding, similarities = aggregate_embeddings_by_sample_and_period(embeddings_for_period)
-            
+            period_embeddings = [get_embedding(image["path"]) for image in images]
+            aggregate, similarities = aggregate_embeddings_by_sample_and_period(period_embeddings)
             if period == "PRE":
-                embeddings_pre.append(aggregate_embedding)
+                embeddings_pre.append(aggregate)
                 labels_pre.append(images[0]["label"])
-                
-                
             elif period == "POST":
-                embeddings_post.append(aggregate_embedding)
+                embeddings_post.append(aggregate)
                 labels_post.append(images[0]["label"])
-                
-            statistic_info["cosine_similarity_at_one_point"][sample_id][period] = \
-            (similarities.tolist(), list(map(lambda x: x["image_id"], images)))
-            
-            
+            statistic_info["cosine_similarity_at_one_point"][sample_id][period] = (
+                similarities.tolist(),
+                [image["image_id"] for image in images],
+            )
     return embeddings_pre, labels_pre, embeddings_post, labels_post, statistic_info

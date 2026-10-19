@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "paths": {
+    "database": "Scripts/ResearchTool/Data/forest/state.sqlite",
+    "output_root": "Scripts/ResearchScripts/Outputs/ml_experiments",
+    "embedding_cache": "Scripts/ResearchTool/Data/cache/forest/ml_embeddings",
+    "checkpoint": "checkpoints/models--chendelong--RemoteCLIP/snapshots/bf1d8a3ccf2ddbf7c875705e46373bfe542bce38/RemoteCLIP-ViT-B-32.pt"
+  },
+  "dataset": {
+    "target_classes": [
+      "Logging",
+      "Wildfire"
+    ],
+    "preview_view": "rgb",
+    "periods": [
+      "PRE",
+      "POST",
+      "EVENT"
+    ],
+    "include_virtual_backfill": true,
+    "season_windows": {
+      "spring": [
+        "04-15",
+        "05-31"
+      ],
+      "early_summer": [
+        "06-01",
+        "07-15"
+      ],
+      "late_summer": [
+        "08-01",
+        "09-15"
+      ],
+      "autumn": [
+        "09-16",
+        "10-31"
+      ]
+    }
+  },
+  "embedding": {
+    "model_name": "ViT-B-32",
+    "checkpoint_env": "REMOTECLIP_CHECKPOINT",
+    "device": "auto",
+    "cache_policy": "read_write",
+    "progress_every": 25,
+    "preprocessing_version": "open_clip_default_v1",
+    "normalization_version": "l2_v1"
+  },
+  "classifier": {
+    "class_weight": "balanced",
+    "max_iter": 2000,
+    "solver": "liblinear",
+    "random_state": 42
+  },
+  "experiments": {
+    "feature_variants": [
+      "PRE",
+      "POST",
+      "DELTA",
+      "PRE_POST",
+      "POST_DELTA",
+      "PRE_POST_DELTA"
+    ],
+    "nomanual_review_feature": "POST"
+  },
+  "profiles": {
+    "quick": {
+      "n_splits": 5,
+      "seeds": [
+        42
+      ]
+    },
+    "final": {
+      "n_splits": 5,
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    }
+  }
+}
