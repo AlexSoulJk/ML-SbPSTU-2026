@@ -75,6 +75,14 @@
               </select>
             </label>
             <label>
+              Sentinel
+              <select id="forestSentinelAvailabilityFilter">
+                <option value="">Any</option>
+                <option value="has_downloads">Has downloads in DB</option>
+                <option value="no_downloads">No downloads in DB</option>
+              </select>
+            </label>
+            <label>
               Nearest N
               <input id="forestNearestInput" type="number" min="0" max="250" value="25" />
             </label>
@@ -635,6 +643,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-bundle-source-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=forest-bundle-import-audit-1"></script>
   </body>
 </html>

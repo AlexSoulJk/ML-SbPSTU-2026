@@ -25,6 +25,7 @@ from backend.forest.models import (  # noqa: E402
     SampleEventDownload,
     SentinelDownload,
 )
+from backend.forest.routes import samples_select  # noqa: E402
 from backend.forest.sentinel_batch_service import (  # noqa: E402
     BatchOptions,
     plan_sentinel_batch,
@@ -196,6 +197,34 @@ class DataOperationsTest(unittest.TestCase):
         self.assertEqual(len(links), 2)
         self.assertEqual({link.period for link in links}, {"PRE", "POST"})
         self.assertEqual(download.period, "POST")
+
+    def test_sample_filter_can_require_or_exclude_sentinel_downloads(self) -> None:
+        with_download = sample("sample-with-download")
+        without_download = sample("sample-without-download")
+        self.db.add_all([with_download, without_download])
+        self.db.add(
+            SentinelDownload(
+                download_id="download-for-filter",
+                sample_id=with_download.sample_id,
+                scene_id="scene-for-filter",
+                period="POST",
+                local_path="cache/filter.tif",
+                bbox_json="[29.9, 59.9, 30.1, 60.1]",
+                bands_json="[]",
+                metadata_json="{}",
+            )
+        )
+        self.db.commit()
+
+        with_rows = list(
+            self.db.scalars(samples_select({"sentinel_availability": "has_downloads"}))
+        )
+        without_rows = list(
+            self.db.scalars(samples_select({"sentinel_availability": "no_downloads"}))
+        )
+
+        self.assertEqual([row.sample_id for row in with_rows], [with_download.sample_id])
+        self.assertEqual([row.sample_id for row in without_rows], [without_download.sample_id])
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import (
+    FOREST_DATA_DIR,
     FOREST_IMPORTS_DIR,
     FOREST_SENTINEL_RASTER_CACHE_DIR,
     FOREST_STATE_DB_PATH,
@@ -23,6 +24,7 @@ from ..config import (
 )
 from .models import (
     DerivedPreview,
+    ManualValidation,
     SampleEvent,
     SampleEventDownload,
     SentinelDownload,
@@ -53,6 +55,8 @@ BUNDLE_PROFILES = {
 
 ProgressCallback = Callable[[str, str, int, int], None]
 CancelCallback = Callable[[], bool]
+BUNDLE_BACKUP_DIR = FOREST_DATA_DIR / "backups"
+EXPECTED_PREVIEW_VIEWS = {"rgb", "false_color", "ndvi", "nbr", "ndmi", "scl"}
 
 
 def portable_path(path: str | Path) -> str:
@@ -654,6 +658,76 @@ def copy_bundle_member(bundle_path: Path, relative_path: str, target: Path) -> N
     shutil.copy2(source_path, target)
 
 
+def verify_bundle_import(db: Session, download_ids: list[str]) -> dict[str, Any]:
+    unique_ids = sorted(set(download_id for download_id in download_ids if download_id))
+    downloads = (
+        list(
+            db.scalars(
+                select(SentinelDownload).where(SentinelDownload.download_id.in_(unique_ids))
+            )
+        )
+        if unique_ids
+        else []
+    )
+    sample_ids = sorted({download.sample_id for download in downloads})
+    manual_sample_ids = (
+        set(
+            db.scalars(
+                select(ManualValidation.sample_id).where(
+                    ManualValidation.sample_id.in_(sample_ids)
+                )
+            )
+        )
+        if sample_ids
+        else set()
+    )
+    previews = (
+        list(
+            db.scalars(
+                select(DerivedPreview).where(DerivedPreview.download_id.in_(unique_ids))
+            )
+        )
+        if unique_ids
+        else []
+    )
+    preview_download_ids = {preview.download_id for preview in previews}
+    missing_preview_rows = [
+        preview for preview in previews if not resolve_storage_path(preview.png_path).exists()
+    ]
+    missing_preview_download_ids = sorted(
+        {preview.download_id for preview in missing_preview_rows}
+    )
+    downloads_without_preview_rows = sorted(set(unique_ids) - preview_download_ids)
+    preview_views_by_download: dict[str, set[str]] = {}
+    for preview in previews:
+        preview_views_by_download.setdefault(preview.download_id, set()).add(preview.view)
+    incomplete_preview_download_ids = sorted(
+        download_id
+        for download_id in unique_ids
+        if preview_views_by_download.get(download_id, set()) != EXPECTED_PREVIEW_VIEWS
+    )
+    return {
+        "bundle_downloads": len(unique_ids),
+        "database_downloads": len(downloads),
+        "samples": len(sample_ids),
+        "samples_without_manual_validation": len(set(sample_ids) - manual_sample_ids),
+        "raster_files_ready": sum(
+            resolve_storage_path(download.local_path).exists() for download in downloads
+        ),
+        "preview_rows": len(previews),
+        "preview_files_ready": sum(
+            resolve_storage_path(preview.png_path).exists() for preview in previews
+        ),
+        "missing_preview_files": len(missing_preview_rows),
+        "downloads_without_preview_rows": len(downloads_without_preview_rows),
+        "incomplete_preview_downloads": len(incomplete_preview_download_ids),
+        "missing_preview_download_ids": missing_preview_download_ids[:100],
+        "downloads_without_preview_row_ids": downloads_without_preview_rows[:100],
+        "incomplete_preview_download_ids": incomplete_preview_download_ids[:100],
+        "sample_ids": sample_ids,
+    }
+
+
 def import_bundle(
     db: Session,
     raw_path: str,
@@ -677,7 +751,8 @@ def import_bundle(
         nonlocal backup_path
         if backup_path is not None or not FOREST_STATE_DB_PATH.exists():
             return
-        backup_path = FOREST_STATE_DB_PATH.with_name(
+        BUNDLE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup_path = BUNDLE_BACKUP_DIR / (
             f"{FOREST_STATE_DB_PATH.stem}_before_bundle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sqlite"
         )
         with sqlite3.connect(FOREST_STATE_DB_PATH) as source_db, sqlite3.connect(backup_path) as backup_db:
@@ -788,6 +863,7 @@ def import_bundle(
                 )
         db.commit()
 
+    verification = verify_bundle_import(db, list(downloads))
     artifact_dir = output_dir("sentinel_bundle_import")
     operations_path = artifact_dir / "operations.csv"
     errors_path = artifact_dir / "errors.csv"
@@ -805,6 +881,7 @@ def import_bundle(
         "copied": copied,
         "failed": failed,
         "previews_rebuilt": rebuilt,
+        "verification": verification,
         "backup_path": str(backup_path) if backup_path else None,
         "operations_csv": str(operations_path),
         "errors_csv": str(errors_path),

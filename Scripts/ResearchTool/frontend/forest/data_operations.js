@@ -122,6 +122,7 @@ function renderJob() {
   const done = Number(job.done || 0);
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
   const result = job.result || {};
+  const verification = result.verification || null;
   const artifactPath = result.zip_path
     || result.csv_path
     || result.bundle_selection
@@ -131,6 +132,17 @@ function renderJob() {
     <strong>${escapeHtml(job.stage || job.status)}</strong>
     <span>${escapeHtml(job.message || "")}</span>
     <div class="forestDataOperationsProgress"><span style="width:${Math.max(0, Math.min(100, percent))}%"></span></div>
+    ${verification ? `<div class="forestDataOperationsMetrics">
+      ${metricsHtml({
+        downloads_ready: `${verification.database_downloads}/${verification.bundle_downloads}`,
+        samples: verification.samples,
+        no_manual_samples: verification.samples_without_manual_validation,
+        preview_files_ready: verification.preview_files_ready,
+        missing_previews: verification.missing_preview_files,
+        incomplete_downloads: verification.incomplete_preview_downloads,
+      })}
+    </div>` : ""}
+    ${result.backup_path ? `<span class="meta">Database backup: ${escapeHtml(result.backup_path)}</span>` : ""}
     ${artifactPath ? `<a class="forestDataOperationsArtifact" href="${artifactUrl(artifactPath)}">Open artifact</a>` : ""}
   `;
 

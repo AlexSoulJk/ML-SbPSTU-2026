@@ -90,6 +90,7 @@ SENTINEL_REVIEW_REASON_CODES = {
 }
 VALID_FOR_NEW_SEARCH_FILTER = "__valid_for_new_search"
 NO_MANUAL_VALIDATION_FILTER = "__no_manual_validation"
+SENTINEL_AVAILABILITY_VALUES = {"has_downloads", "no_downloads"}
 SPECIAL_MANUAL_VALIDATION_FILTERS = {
     VALID_FOR_NEW_SEARCH_FILTER,
     NO_MANUAL_VALIDATION_FILTER,
@@ -300,6 +301,7 @@ def sample_conditions(
     confidence: str | None = None,
     region: str | None = None,
     manual_validation: str | None = None,
+    sentinel_availability: str | None = None,
 ) -> list[Any]:
     conditions: list[Any] = []
     if q:
@@ -355,6 +357,17 @@ def sample_conditions(
             conditions.append(~has_manual_validation)
         else:
             conditions.append(ManualValidation.validation == manual_validation)
+    if sentinel_availability in SENTINEL_AVAILABILITY_VALUES:
+        has_sentinel_download = (
+            select(SentinelDownload.download_id)
+            .where(SentinelDownload.sample_id == Sample.sample_id)
+            .exists()
+        )
+        conditions.append(
+            has_sentinel_download
+            if sentinel_availability == "has_downloads"
+            else ~has_sentinel_download
+        )
     return conditions
 
 
@@ -370,6 +383,7 @@ def samples_select(filters: dict[str, Any], *, count: bool = False) -> Any:
         confidence=filters.get("confidence"),
         region=filters.get("region"),
         manual_validation=manual_validation,
+        sentinel_availability=filters.get("sentinel_availability"),
     )
     if conditions:
         stmt = stmt.where(*conditions)
@@ -839,13 +853,30 @@ def run_bundle_import_job(job_id: str, request: BundleImportRequest) -> None:
             should_cancel=lambda: job_cancel_requested(job_id),
         )
         cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
+        verification = result.get("verification") or {}
+        verification_failed = bool(
+            verification.get("missing_preview_files")
+            or verification.get("downloads_without_preview_rows")
+            or verification.get("incomplete_preview_downloads")
+            or verification.get("database_downloads") != verification.get("bundle_downloads")
+        )
         jobs.update(
             job_id,
-            status="cancelled" if cancelled else "completed_with_errors" if result["failed"] else "completed",
+            status=(
+                "cancelled"
+                if cancelled
+                else "completed_with_errors"
+                if result["failed"] or verification_failed
+                else "completed"
+            ),
             stage="cancelled" if cancelled else "done",
             done=result["files_processed"],
             total=result["files_processed"],
-            message=f"Import: {result['copied']} copied, {result['failed']} failed",
+            message=(
+                f"Import: {result['copied']} copied, {result['failed']} failed; "
+                f"{result['previews_rebuilt']} downloads rebuilt; "
+                f"{verification.get('samples_without_manual_validation', 0)} no-manual samples ready"
+            ),
             result=result,
         )
     except Exception as exc:
@@ -899,6 +930,7 @@ def list_samples(
     confidence: str | None = None,
     region: str | None = None,
     manual_validation: str | None = None,
+    sentinel_availability: str | None = None,
     selected_id: str | None = None,
     nearest_n: int = Query(25, ge=0, le=250),
 ) -> dict[str, Any]:
@@ -909,6 +941,7 @@ def list_samples(
         "confidence": confidence,
         "region": region,
         "manual_validation": manual_validation,
+        "sentinel_availability": sentinel_availability,
     }
     total = db.scalar(samples_select(filters, count=True)) or 0
     page_stmt = samples_select(filters).limit(limit).offset(offset)

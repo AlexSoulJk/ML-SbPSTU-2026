@@ -1,5 +1,5 @@
 import { clearForestLayers, renderForestMap } from "./map.js?v=forest-event-fix-1";
-import { initDataOperations } from "./data_operations.js?v=forest-bundle-source-1";
+import { initDataOperations } from "./data_operations.js?v=forest-bundle-import-audit-1";
 import {
   analyzeHansen,
   applyDbSync,
@@ -100,6 +100,7 @@ function currentFilters() {
     driver: $("forestDriverInput").value.trim(),
     region: $("forestRegionInput").value.trim(),
     manual_validation: $("forestValidationFilter").value,
+    sentinel_availability: $("forestSentinelAvailabilityFilter").value,
   };
 }
 
