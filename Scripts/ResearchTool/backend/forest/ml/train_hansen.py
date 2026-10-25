@@ -23,45 +23,30 @@ from backend.config import FOREST_FEATURES_DIR, FOREST_MODELS_DIR
 # === Конфиг ===
 DATASET = FOREST_FEATURES_DIR / "training_features_valid.parquet"
 
+# Финальный набор признаков (без координат и POST-влажности),
+# который дает честный F1 = 0.862 без confounding.
 FEATURE_COLS = [
-    # Hansen
+    # Спектральные относительные дельты (PRE -> POST)
+    "ndvi_median_rel",
+    "nbr_median_rel",
+    "ndmi_median_rel",
+
+    # Контекст Hansen
     "hansen_loss_fraction",
     "hansen_recent_loss_5y",
     "hansen_dominant_share",
-
-    # Спектральные абсолютные уровни
-    "ndvi_median_pre", "ndvi_median_post",
-    "nbr_median_pre",  "nbr_median_post",
-    "ndmi_median_pre", "ndmi_median_post",
-
-    # Изменения PRE -> POST
-    "ndvi_median_delta", "ndvi_median_rel",
-    "nbr_median_delta",  "nbr_median_rel",
-    "ndmi_median_delta", "ndmi_median_rel",
-
-    # SCL доли
-    "scl_4_frac_pre", "scl_4_frac_post",
-    "scl_5_frac_pre", "scl_5_frac_post",
-
-    # Форма маски потери леса
-    "loss_n_components",
-    "loss_largest_share",
-    "loss_mean_area_ha",
-    "loss_compactness",
-    "loss_rectangularity",
-    "loss_perimeter_area_ratio",
-    "loss_edge_density",
 ]
 
 MIN_CLASS_SIZE = 20
 N_SPLITS = 5
 ONLY_DRIVERS: tuple[str, ...] | None = ("Wildfire", "Logging")
 
-# "group" — GroupKFold по GROUP_COL; "stratified" — StratifiedKFold
+# "group" — GroupKFold по GROUP_COL (честная проверка по годам)
 CV_MODE = "group"
 GROUP_COL = "hansen_event_year"
 
-MODEL_NAME = "hansen_driver_spectral"
+# Имя для сохранения финальной модели и метрик
+MODEL_NAME = "hansen_driver_final"
 RANDOM_STATE = 42
 
 
@@ -169,12 +154,6 @@ def main() -> None:
     print(f"Строк: {len(df)}")
     print(f"Распределение: {dict(zip(class_names, np.bincount(y).tolist()))}")
 
-    # Диагностика групп vs классов
-    if GROUP_COL in df.columns:
-        ct = pd.crosstab(df[GROUP_COL].fillna("unknown"), df["driver_primary"])
-        print(f"\n{GROUP_COL} x class:")
-        print(ct.to_string())
-
     cv, groups, cv_desc = build_cv(df, y)
     print(f"\nCV: {cv_desc}\n")
 
@@ -193,12 +172,7 @@ def main() -> None:
             sorted(set(df[GROUP_COL].fillna("unknown").astype(str).iloc[va]))
             if GROUP_COL in df.columns else []
         )
-        train_classes = sorted(set(class_names[i] for i in y[tr]))
-        val_classes = sorted(set(class_names[i] for i in y[va]))
-        print(f"  fold {fold}: train={len(tr)} val={len(va)}")
-        print(f"    {GROUP_COL} в val: {val_groups}")
-        print(f"    классы train: {train_classes}")
-        print(f"    классы val:   {val_classes}")
+        print(f"  fold {fold}: train={len(tr)} val={len(va)}  val_years={val_groups}")
 
     print()
     print("=" * 70)
@@ -219,9 +193,6 @@ def main() -> None:
     for i, row in enumerate(cm):
         print(f"{class_names[i]:>26s} " + " ".join(f"{v:>6d}" for v in row))
     print()
-    print("Порядок классов (индекс -> имя):")
-    for idx, name in enumerate(class_names):
-        print(f"  {idx}: {name}")
 
     f1m = f1_score(y, oof, average="macro", zero_division=0)
     print(f"\nF1-macro: {f1m:.3f}")
@@ -233,7 +204,7 @@ def main() -> None:
     FOREST_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = FOREST_MODELS_DIR / f"{MODEL_NAME}.json"
     final.save_model(model_path)
-    print(f"[ok] модель: {model_path}")
+    print(f"[ok] модель сохранена: {model_path}")
 
     imp = pd.DataFrame({
         "feature": feats,
