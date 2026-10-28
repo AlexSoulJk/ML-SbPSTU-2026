@@ -29,6 +29,12 @@ from backend.forest.event_review_service import save_event_review  # noqa: E402
 from backend.forest.hansen_service import hansen_tile_preview_payload  # noqa: E402
 from backend.forest.db_sync_service import apply_operation, compare_portable_tables  # noqa: E402
 from backend.forest.model_labeling_service import build_model_labeling_plan  # noqa: E402
+from backend.forest.model_inference_service import (  # noqa: E402
+    Prediction,
+    execute_model_labeling,
+    file_sha256,
+    stable_hash,
+)
 from backend.forest.candidate_service import (  # noqa: E402
     ALGORITHM_NAME,
     ALGORITHM_VERSION,
@@ -41,6 +47,8 @@ from backend.forest.candidate_service import (  # noqa: E402
 )
 from backend.forest.models import (  # noqa: E402
     Base,
+    DerivedPreview,
+    EventLabel,
     EventReview,
     HansenCandidate,
     HansenCandidateRun,
@@ -395,6 +403,203 @@ class DataOperationsTest(unittest.TestCase):
         self.assertEqual(plan["summary"]["events"], 2)
         self.assertEqual(plan["summary"]["incomplete_inputs"], 2)
         self.assertFalse(plan["summary"]["remoteclip_artifact_ready"])
+
+    def test_model_labeling_is_idempotent_and_keeps_manual_review_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            models_root = root / "models"
+            exports_root = root / "exports"
+            checkpoint = root / "remoteclip.pt"
+            checkpoint.write_bytes(b"checkpoint")
+
+            def write_artifact(directory: str, filename: str, manifest: dict) -> None:
+                model_dir = models_root / directory / "v1"
+                model_dir.mkdir(parents=True)
+                artifact = model_dir / filename
+                artifact.write_bytes(f"{directory}-artifact".encode("utf-8"))
+                manifest.update(
+                    {
+                        "producer_version": "v1",
+                        "artifact_sha256": file_sha256(artifact),
+                        "class_order": ["Logging", "Wildfire"],
+                    }
+                )
+                (model_dir / "manifest.json").write_text(
+                    json.dumps(manifest),
+                    encoding="utf-8",
+                )
+
+            write_artifact(
+                "remoteclip_logreg",
+                "classifier.joblib",
+                {
+                    "producer_name": "REMOTECLIP_LOGREG",
+                    "feature_schema_version": "remoteclip-test-v1",
+                    "feature_variant": "POST",
+                    "embedding": {
+                        "checkpoint_path": str(checkpoint),
+                        "checkpoint_sha256": file_sha256(checkpoint),
+                    },
+                },
+            )
+            write_artifact(
+                "xgboost",
+                "model.json",
+                {
+                    "producer_name": "XGBOOST",
+                    "feature_schema_version": "xgboost-test-v1",
+                    "feature_names": ["ndvi_median_rel"],
+                    "preprocessing": {"fill_values": {"ndvi_median_rel": 0.0}},
+                },
+            )
+
+            item = sample("model-label-sample")
+            item.source_format = "HANSEN_MINING"
+            item.driver_primary = None
+            event = SampleEvent(
+                event_id=event_id_for(item.sample_id, "HANSEN", 2020),
+                sample_id=item.sample_id,
+                event_year=2020,
+                source="HANSEN",
+                loss_area_ha=5.0,
+                loss_share=1.0,
+                is_dominant=True,
+            )
+            run_id = "model-label-run"
+            self.db.add_all(
+                [
+                    item,
+                    event,
+                    EventReview(event_id=event.event_id, review_status="DRAFT"),
+                    SampleAssignment(
+                        sample_id=item.sample_id,
+                        assignment_type="hansen_mining_run",
+                        assignment_name=run_id,
+                    ),
+                ]
+            )
+            for period in ("PRE", "POST"):
+                geotiff = root / f"{period.lower()}.tif"
+                preview = root / f"{period.lower()}.png"
+                metadata = root / f"{period.lower()}.json"
+                geotiff.write_bytes(b"geotiff")
+                preview.write_bytes(b"preview")
+                metadata.write_text("{}", encoding="utf-8")
+                download_id = f"download-{period.lower()}"
+                self.db.add_all(
+                    [
+                        SentinelDownload(
+                            download_id=download_id,
+                            sample_id=item.sample_id,
+                            scene_id=f"scene-{period.lower()}",
+                            period=period,
+                            local_path=str(geotiff),
+                            bbox_json="[]",
+                            bands_json="[]",
+                            metadata_json="{}",
+                        ),
+                        SampleEventDownload(
+                            id=f"link-{period.lower()}",
+                            event_id=event.event_id,
+                            download_id=download_id,
+                            period=period,
+                        ),
+                        DerivedPreview(
+                            preview_id=f"preview-{period.lower()}",
+                            download_id=download_id,
+                            view="rgb",
+                            png_path=str(preview),
+                            metadata_path=str(metadata),
+                        ),
+                    ]
+                )
+            self.db.commit()
+
+            class FakeRunner:
+                def __init__(self, source_name: str, artifact: dict):
+                    self.source_name = source_name
+                    self.source_version = artifact["producer_version"]
+
+                def predict(self, inference_item, should_cancel=None):
+                    label = "Logging" if self.source_name == "REMOTECLIP_LOGREG" else "Wildfire"
+                    probabilities = (
+                        {"Logging": 0.8, "Wildfire": 0.2}
+                        if label == "Logging"
+                        else {"Logging": 0.25, "Wildfire": 0.75}
+                    )
+                    return Prediction(
+                        label=label,
+                        confidence=probabilities[label],
+                        probabilities=probabilities,
+                        input_fingerprint=stable_hash(
+                            {
+                                "event_id": inference_item.event.event_id,
+                                "source": self.source_name,
+                                "version": self.source_version,
+                            }
+                        ),
+                        metadata={"test": True},
+                    )
+
+            factories = {
+                source: (lambda artifact, source=source: FakeRunner(source, artifact))
+                for source in ("REMOTECLIP_LOGREG", "XGBOOST")
+            }
+            with (
+                patch("backend.forest.model_labeling_service.FOREST_MODELS_DIR", models_root),
+                patch(
+                    "backend.forest.model_labeling_service.importlib.util.find_spec",
+                    return_value=object(),
+                ),
+                patch("backend.forest.model_inference_service.FOREST_EXPORTS_DIR", exports_root),
+            ):
+                first = execute_model_labeling(
+                    self.db,
+                    mining_run_id=run_id,
+                    execution_id="first",
+                    runner_factories=factories,
+                )
+                second = execute_model_labeling(
+                    self.db,
+                    mining_run_id=run_id,
+                    execution_id="second",
+                    runner_factories=factories,
+                )
+                refreshed_plan = build_model_labeling_plan(
+                    self.db,
+                    mining_run_id=run_id,
+                )
+
+            labels = list(self.db.scalars(select(EventLabel).order_by(EventLabel.source_name)))
+            self.assertEqual(first["created"], 2)
+            self.assertEqual(first["failed"], 0)
+            self.assertEqual(second["created"], 0)
+            self.assertEqual(second["reused"], 2)
+            self.assertEqual([label.source_name for label in labels], ["REMOTECLIP_LOGREG", "XGBOOST"])
+            self.assertEqual(
+                [
+                    (prediction["source_name"], prediction["label"])
+                    for prediction in refreshed_plan["events"][0]["existing_predictions"]
+                ],
+                [("REMOTECLIP_LOGREG", "Logging"), ("XGBOOST", "Wildfire")],
+            )
+            self.assertIsNone(self.db.get(ManualValidation, item.sample_id))
+            self.assertEqual(self.db.get(EventReview, event.event_id).review_status, "DRAFT")
+            self.assertTrue((exports_root / "model_labeling" / "first" / "predictions.csv").exists())
+            accepted = labels[0]
+            accepted_payload = save_event_review(
+                self.db,
+                event.event_id,
+                review_status="VALID",
+                actor_name="tester",
+                label=accepted.label,
+                based_on_label_id=accepted.label_id,
+            )
+            self.assertEqual(accepted_payload["review"]["review_status"], "VALID")
+            self.assertEqual(
+                accepted_payload["review"]["labels"][-1]["based_on_label_id"],
+                accepted.label_id,
+            )
 
     def test_candidate_mining_uses_local_lossyear_tile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

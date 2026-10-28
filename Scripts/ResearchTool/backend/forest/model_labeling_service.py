@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,47 @@ def model_artifact_status(producer_name: str, version: str) -> dict[str, Any]:
             errors.append(f"Invalid manifest.json: {exc}")
     else:
         errors.append("manifest.json is missing")
+    if manifest is not None:
+        if manifest.get("producer_name") not in {None, producer_name}:
+            errors.append("Manifest producer_name does not match requested model")
+        if manifest.get("producer_version") not in {None, safe_version}:
+            errors.append("Manifest producer_version does not match requested version")
+        if not manifest.get("feature_schema_version"):
+            errors.append("Manifest feature_schema_version is missing")
+        class_order = manifest.get("class_order")
+        if class_order != ["Logging", "Wildfire"]:
+            errors.append("Manifest class_order must be [Logging, Wildfire]")
+        if producer_name == "REMOTECLIP_LOGREG":
+            for dependency in ("joblib", "sklearn", "torch", "open_clip"):
+                if importlib.util.find_spec(dependency) is None:
+                    errors.append(f"RemoteCLIP dependency is missing: {dependency}")
+            if not manifest.get("feature_variant"):
+                errors.append("RemoteCLIP manifest feature_variant is missing")
+            embedding = manifest.get("embedding") or {}
+            checkpoint_value = os.getenv("REMOTECLIP_CHECKPOINT") or embedding.get(
+                "checkpoint_path"
+            )
+            if not checkpoint_value:
+                errors.append("RemoteCLIP checkpoint path is missing")
+            else:
+                checkpoint_path = resolve_storage_path(str(checkpoint_value))
+                if not checkpoint_path.exists():
+                    errors.append(f"RemoteCLIP checkpoint is missing: {checkpoint_path}")
+                elif (
+                    embedding.get("checkpoint_sha256")
+                    and file_sha256(checkpoint_path) != embedding["checkpoint_sha256"]
+                ):
+                    errors.append("RemoteCLIP checkpoint SHA-256 does not match manifest")
+        if producer_name == "XGBOOST":
+            if importlib.util.find_spec("xgboost") is None:
+                errors.append("XGBoost dependency is missing: xgboost")
+            feature_names = [str(value) for value in manifest.get("feature_names") or []]
+            if not feature_names:
+                errors.append("XGBoost manifest feature_names are missing")
+            fill_values = (manifest.get("preprocessing") or {}).get("fill_values") or {}
+            missing_fill = [name for name in feature_names if name not in fill_values]
+            if missing_fill:
+                errors.append(f"XGBoost fill values are missing for: {missing_fill}")
     artifact_sha256 = None
     if artifact_path.exists():
         artifact_sha256 = file_sha256(artifact_path)
@@ -160,12 +203,12 @@ def build_model_labeling_plan(
             select(EventLabel).where(
                 EventLabel.event_id.in_(event_ids),
                 EventLabel.source_type == "MODEL",
-            )
+            ).order_by(EventLabel.created_at, EventLabel.label_id)
         )
     ) if event_ids else []
-    label_sources: dict[str, set[str]] = {}
+    latest_labels: dict[str, dict[str, EventLabel]] = {}
     for label in labels:
-        label_sources.setdefault(label.event_id, set()).add(label.source_name)
+        latest_labels.setdefault(label.event_id, {})[label.source_name] = label
 
     links_by_event: dict[str, list[SampleEventDownload]] = {}
     for link in links:
@@ -203,7 +246,19 @@ def build_model_labeling_plan(
                 "rejected_downloads": rejected,
                 "blockers": blockers,
                 "input_status": "READY" if not blockers else "INCOMPLETE_INPUT",
-                "existing_model_sources": sorted(label_sources.get(event.event_id, set())),
+                "existing_predictions": [
+                    {
+                        "label_id": label.label_id,
+                        "source_name": label.source_name,
+                        "source_version": label.source_version,
+                        "label": label.label,
+                        "confidence": label.confidence,
+                    }
+                    for label in sorted(
+                        latest_labels.get(event.event_id, {}).values(),
+                        key=lambda item: item.source_name,
+                    )
+                ],
             }
         )
 

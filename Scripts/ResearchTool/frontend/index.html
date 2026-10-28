@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=hansen-mining-1" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=model-labeling-inference-3" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -514,6 +514,7 @@
                 <div class="forestDataOperationsButtonRow">
                   <button id="forestDataOperationsDownloadPlanBtn" type="button">Build plan</button>
                   <button id="forestDataOperationsDownloadStartBtn" class="primary" type="button" disabled>Start</button>
+                  <button id="forestDataOperationsOpenLabelingBtn" type="button" hidden>Open Model labeling</button>
                   <button id="forestDataOperationsDownloadCancelBtn" type="button" disabled>Cancel</button>
                 </div>
               </footer>
@@ -541,8 +542,12 @@
                 <div id="forestDataOperationsLabelingRows" class="forestDataOperationsRows"></div>
               </section>
               <footer class="forestDataOperationsActionBar">
-                <div class="forestDataOperationsJob">Predictions stay separate from human validation.</div>
-                <div class="forestDataOperationsButtonRow"><button id="forestDataOperationsLabelingPlanBtn" type="button">Build inference plan</button></div>
+                <div id="forestDataOperationsLabelingJob" class="forestDataOperationsJob">Predictions stay separate from human validation.</div>
+                <div class="forestDataOperationsButtonRow">
+                  <button id="forestDataOperationsLabelingPlanBtn" type="button">Build inference plan</button>
+                  <button id="forestDataOperationsLabelingStartBtn" class="primary" type="button" disabled>Start inference</button>
+                  <button id="forestDataOperationsLabelingCancelBtn" type="button" disabled>Cancel</button>
+                </div>
               </footer>
             </section>
 
@@ -765,6 +770,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=hansen-candidate-map-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=model-labeling-inference-3"></script>
   </body>
 </html>

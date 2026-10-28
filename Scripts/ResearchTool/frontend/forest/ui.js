@@ -1,5 +1,5 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=hansen-candidate-map-1";
-import { initDataOperations } from "./data_operations.js?v=hansen-candidate-map-1";
+import { clearForestLayers, renderForestMap } from "./map.js?v=model-labeling-inference-3";
+import { initDataOperations } from "./data_operations.js?v=model-labeling-inference-3";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
@@ -21,8 +21,8 @@ import {
   searchSentinel,
   startHansenBatch,
   startSentinelCacheDownload,
-} from "./samples.js?v=hansen-candidate-map-1";
-import { forestState } from "./state.js?v=hansen-candidate-map-1";
+} from "./samples.js?v=model-labeling-inference-3";
+import { forestState } from "./state.js?v=model-labeling-inference-3";
 
 function $(id) {
   return document.getElementById(id);
@@ -2153,7 +2153,16 @@ function renderEventReviewPanel(sample) {
     return `<div id="forestEventReviewPanel" class="forestEventReviewPanel meta">Select one event to review it or inspect model predictions.</div>`;
   }
   const review = event.review || {};
-  const modelLabels = (review.labels || []).filter((row) => row.source_type === "MODEL");
+  const latestModelLabels = (review.labels || [])
+    .filter((row) => row.source_type === "MODEL")
+    .reduce((labels, row) => ({ ...labels, [row.source_name]: row }), {});
+  const modelLabels = Object.values(latestModelLabels).sort(
+    (first, second) => first.source_name.localeCompare(second.source_name),
+  );
+  const agreedPrediction = modelLabels.length === 2
+    && modelLabels.every((row) => row.label === modelLabels[0].label)
+    ? modelLabels[0]
+    : null;
   const actor = window.localStorage.getItem("forestAnnotatorName") || "";
   return `
     <section id="forestEventReviewPanel" class="forestEventReviewPanel">
@@ -2163,9 +2172,18 @@ function renderEventReviewPanel(sample) {
       </div>
       <div class="forestEventPredictions">
         ${modelLabels.length ? modelLabels.map((label) => `
-          <span><strong>${escapeHtml(label.source_name)}</strong> ${escapeHtml(label.label)} · ${label.confidence === null || label.confidence === undefined ? "n/a" : Number(label.confidence).toFixed(3)} · ${escapeHtml(label.source_version)}</span>
+          <span>
+            <strong>${escapeHtml(label.source_name)}</strong>
+            ${escapeHtml(label.label)} · ${label.confidence === null || label.confidence === undefined ? "n/a" : Number(label.confidence).toFixed(3)} · ${escapeHtml(label.source_version)}
+            <button type="button" data-event-model-label-id="${escapeHtml(label.label_id)}" data-event-model-label="${escapeHtml(label.label)}">Accept</button>
+          </span>
         `).join("") : `<span class="meta">No model predictions yet.</span>`}
         <span><strong>Agreement</strong> ${escapeHtml(review.model_agreement || "INCOMPLETE")}</span>
+        ${agreedPrediction ? `
+          <button type="button" data-event-model-label-id="${escapeHtml(agreedPrediction.label_id)}" data-event-model-label="${escapeHtml(agreedPrediction.label)}">
+            Accept agreed ${escapeHtml(agreedPrediction.label)}
+          </button>
+        ` : ""}
       </div>
       <div class="forestEventReviewControls">
         <label>Status
@@ -2368,6 +2386,12 @@ function renderDetail() {
     });
   });
   $("forestEventReviewSaveBtn")?.addEventListener("click", () => run(saveCurrentEventReview));
+  document.querySelectorAll("[data-event-model-label-id]").forEach((button) => {
+    button.addEventListener("click", () => run(() => saveCurrentEventReview({
+      basedOnLabelId: button.dataset.eventModelLabelId,
+      acceptedLabel: button.dataset.eventModelLabel,
+    })));
+  });
   $("forestHansenTreecoverInput").addEventListener("change", (event) => {
     forestState.includeHansenTreecover = event.target.checked;
   });
@@ -2990,19 +3014,20 @@ async function saveValidation() {
   setForestStatus(`validation saved: ${validation}`);
 }
 
-async function saveCurrentEventReview() {
+async function saveCurrentEventReview({ basedOnLabelId = null, acceptedLabel = null } = {}) {
   const sample = forestState.selectedDetail;
   const event = (sample?.events || []).find(
     (row) => row.event_id === forestState.selectedSampleEventId,
   );
   if (!sample || !event) throw new Error("Select one event before saving an event review.");
-  const reviewStatus = $("forestEventReviewStatus").value;
+  const reviewStatus = basedOnLabelId ? "VALID" : $("forestEventReviewStatus").value;
   const actorName = $("forestEventReviewActor").value.trim();
   if (!actorName) throw new Error("Enter a reviewer name.");
   window.localStorage.setItem("forestAnnotatorName", actorName);
   await saveEventReview(event.event_id, {
     review_status: reviewStatus,
-    label: reviewStatus === "VALID" ? $("forestEventReviewLabel").value : null,
+    label: reviewStatus === "VALID" ? (acceptedLabel || $("forestEventReviewLabel").value) : null,
+    based_on_label_id: basedOnLabelId,
     rejection_reason: reviewStatus === "REJECTED" ? $("forestEventReviewReason").value.trim() : null,
     notes: $("forestEventReviewNotes").value.trim() || null,
     actor_name: actorName,

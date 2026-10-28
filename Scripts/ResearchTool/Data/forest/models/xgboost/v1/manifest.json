@@ -1,0 +1,49 @@
+{
+  "artifact_schema_version": "xgboost_event_classifier_v1",
+  "producer_name": "XGBOOST",
+  "producer_version": "v1",
+  "artifact_path": "Scripts/ResearchTool/Data/forest/models/xgboost/v1/model.json",
+  "artifact_sha256": "35292130be5023c0dcc6c86cdab1e7d095299ef0b1e71ccbf13fc9efbd425ded",
+  "metrics_path": "Scripts/ResearchTool/Data/forest/models/xgboost/v1/metrics.json",
+  "created_at": "2026-10-28T17:47:22.106234+00:00",
+  "feature_schema_version": "xgboost_event_spectral_hansen_v1",
+  "feature_names": [
+    "ndvi_median_rel",
+    "nbr_median_rel",
+    "ndmi_median_rel",
+    "hansen_loss_fraction",
+    "hansen_recent_loss_5y",
+    "hansen_dominant_share"
+  ],
+  "class_order": [
+    "Logging",
+    "Wildfire"
+  ],
+  "preprocessing": {
+    "fill_values": {
+      "ndvi_median_rel": -0.029276686598620774,
+      "nbr_median_rel": -0.06754015111604647,
+      "ndmi_median_rel": -0.09453887233647733,
+      "hansen_loss_fraction": 0.28654999999999997,
+      "hansen_recent_loss_5y": 0.20105,
+      "hansen_dominant_share": 0.7577
+    },
+    "spectral_aggregation": "median per PRE/POST period",
+    "relative_delta": "(POST - PRE) / (abs(PRE) + 1e-6)",
+    "hansen_context": "sample AOI total/recent loss and dominant event share"
+  },
+  "training": {
+    "dataset": "Scripts/ResearchTool/Data/forest/features/training_features_valid.parquet",
+    "dataset_sha256": "b9e5ef2b68022200a6f1048255580a17068158589496dac3bfb289056ae48d06",
+    "rows": 140,
+    "class_counts": {
+      "Logging": 77,
+      "Wildfire": 63
+    },
+    "cv_description": "GroupKFold по hansen_event_year, n_splits=5 (groups=10)"
+  },
+  "software": {
+    "xgboost": "3.2.0",
+    "numpy": "2.4.6"
+  }
+}

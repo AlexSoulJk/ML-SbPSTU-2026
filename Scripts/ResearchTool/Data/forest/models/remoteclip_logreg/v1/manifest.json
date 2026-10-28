@@ -1,0 +1,77 @@
+{
+  "artifact_path": "Scripts/ResearchTool/Data/forest/models/remoteclip_logreg/v1/classifier.joblib",
+  "artifact_schema_version": "remoteclip_logreg_artifact_v1",
+  "artifact_sha256": "badf16da4136de93f7082ee0ff31a0e44efbe24f69e10e01fbd7e7590b1a4225",
+  "class_order": [
+    "Logging",
+    "Wildfire"
+  ],
+  "classifier_config": {
+    "class_weight": "balanced",
+    "max_iter": 2000,
+    "random_state": 42,
+    "solver": "liblinear"
+  },
+  "created_at": "2026-10-28T17:37:41.605309+00:00",
+  "decision_threshold": 0.5,
+  "embedding": {
+    "checkpoint_path": "checkpoints/models--chendelong--RemoteCLIP/snapshots/bf1d8a3ccf2ddbf7c875705e46373bfe542bce38/RemoteCLIP-ViT-B-32.pt",
+    "checkpoint_sha256": "60014e395d930a3f2963d1d89c8522bf4ad56775571e4356e866864789af85c4",
+    "model_name": "ViT-B-32",
+    "normalization_version": "l2_v1",
+    "preprocessing_version": "open_clip_default_v1"
+  },
+  "experiment_config_fingerprint": "86c9eece6a81a4afc19735be5c7c241d0d1763241c01350123a61a1e899b37ee",
+  "feature_dimension": 1024,
+  "feature_schema_version": "remoteclip_event_embedding_v1",
+  "feature_variant": "PRE_POST",
+  "metrics_path": "Scripts/ResearchTool/Data/forest/models/remoteclip_logreg/v1/metrics.json",
+  "producer_name": "REMOTECLIP_LOGREG",
+  "producer_version": "v1",
+  "required_periods": [
+    "PRE",
+    "POST"
+  ],
+  "round_trip_smoke_test": {
+    "probability_wildfire": 0.9988488691027387,
+    "status": "passed"
+  },
+  "selection": {
+    "metrics": {
+      "accuracy_mean": 0.9647783251231528,
+      "accuracy_std": 0.03912769151194203,
+      "balanced_accuracy_mean": 0.9673076923076923,
+      "balanced_accuracy_std": 0.034353980932595854,
+      "f1_mean": 0.9623703703703703,
+      "f1_std": 0.040589348342916366,
+      "feature_variant": "PRE_POST",
+      "fold_runs": 5,
+      "metric_semantics": "wri_label_on_event_confirmed_manual_cohort",
+      "mode": "MANUAL_ONLY",
+      "roc_auc_mean": 0.9980769230769231,
+      "roc_auc_std": 0.0023552785988299706,
+      "split_strategy": "stratified_group"
+    },
+    "strategy": "best grouped-CV balanced_accuracy within configured training mode"
+  },
+  "software": {
+    "numpy": "2.4.6",
+    "scikit_learn": "1.9.1"
+  },
+  "training_cohort": {
+    "class_counts": {
+      "Logging": 78,
+      "Wildfire": 64
+    },
+    "mode": "MANUAL_ONLY",
+    "record_ids_sha256": "8398c93786eacc47ded4a2f4e06242a91bedd201fe82f16ebb7eeafa3df1d8ed",
+    "records": 142,
+    "samples": 135
+  },
+  "training_database_fingerprint": {
+    "mtime_ns": 1793193396463719000,
+    "path": "Scripts/ResearchTool/Data/forest/state.sqlite",
+    "sha256": "4d1da6e385616ae7d89e048cbae0d0c6de5ea8c3f495a4e5244e85b478efa160",
+    "size": 55840768
+  }
+}

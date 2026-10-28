@@ -1,0 +1,52 @@
+{
+  "n_samples": 140,
+  "n_features": 6,
+  "n_classes": 2,
+  "class_names": [
+    "Logging",
+    "Wildfire"
+  ],
+  "class_counts": {
+    "Logging": 77,
+    "Wildfire": 63
+  },
+  "f1_macro": 0.8611618560467665,
+  "cv_mode": "group",
+  "cv_description": "GroupKFold по hansen_event_year, n_splits=5 (groups=10)",
+  "group_col": "hansen_event_year",
+  "top_features": [
+    {
+      "feature": "hansen_recent_loss_5y",
+      "importance": 0.3491226136684418
+    },
+    {
+      "feature": "nbr_median_rel",
+      "importance": 0.19552743434906006
+    },
+    {
+      "feature": "hansen_dominant_share",
+      "importance": 0.14000138640403748
+    },
+    {
+      "feature": "ndmi_median_rel",
+      "importance": 0.11663028597831726
+    },
+    {
+      "feature": "hansen_loss_fraction",
+      "importance": 0.11414407938718796
+    },
+    {
+      "feature": "ndvi_median_rel",
+      "importance": 0.08457417041063309
+    }
+  ],
+  "features_used": [
+    "ndvi_median_rel",
+    "nbr_median_rel",
+    "ndmi_median_rel",
+    "hansen_loss_fraction",
+    "hansen_recent_loss_5y",
+    "hansen_dominant_share"
+  ],
+  "dataset": "C:\\Users\\Hp\\OneDrive\\Рабочий стол\\учёба\\ML\\ML-SbPSTU-2026\\Scripts\\ResearchTool\\Data\\forest\\features\\training_features_valid.parquet"
+}

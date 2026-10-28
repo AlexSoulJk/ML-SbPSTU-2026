@@ -1065,6 +1065,23 @@ textarea {
   font-size: 11px;
 }
 
+.forestEventPredictions > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.forestEventPredictions button {
+  justify-self: start;
+  padding: 3px 7px;
+  font-size: 10px;
+}
+
+.forestEventPredictions > span button {
+  margin-left: auto;
+}
+
 .forestEventReviewControls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

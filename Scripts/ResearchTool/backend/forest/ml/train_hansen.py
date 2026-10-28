@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _here = Path(__file__).resolve()
@@ -18,6 +20,7 @@ from sklearn.model_selection import GroupKFold, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 
 from backend.config import FOREST_FEATURES_DIR, FOREST_MODELS_DIR
+from backend.forest.storage_paths import to_storage_path
 
 
 # === Конфиг ===
@@ -45,9 +48,18 @@ ONLY_DRIVERS: tuple[str, ...] | None = ("Wildfire", "Logging")
 CV_MODE = "group"
 GROUP_COL = "hansen_event_year"
 
-# Имя для сохранения финальной модели и метрик
-MODEL_NAME = "hansen_driver_final"
+# Версионированный production artifact для UI inference.
+MODEL_VERSION = "v1"
+FEATURE_SCHEMA_VERSION = "xgboost_event_spectral_hansen_v1"
 RANDOM_STATE = 42
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def prepare(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,8 +213,9 @@ def main() -> None:
     final = make_classifier(n_classes)
     final.fit(X, y)
 
-    FOREST_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = FOREST_MODELS_DIR / f"{MODEL_NAME}.json"
+    model_dir = FOREST_MODELS_DIR / "xgboost" / MODEL_VERSION
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_path = model_dir / "model.json"
     final.save_model(model_path)
     print(f"[ok] модель сохранена: {model_path}")
 
@@ -230,12 +243,45 @@ def main() -> None:
         "features_used": feats,
         "dataset": str(DATASET),
     }
-    metrics_path = FOREST_MODELS_DIR / f"{MODEL_NAME}_metrics.json"
+    metrics_path = model_dir / "metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     print(f"[ok] метрики: {metrics_path}")
+
+    manifest = {
+        "artifact_schema_version": "xgboost_event_classifier_v1",
+        "producer_name": "XGBOOST",
+        "producer_version": MODEL_VERSION,
+        "artifact_path": to_storage_path(model_path) or str(model_path),
+        "artifact_sha256": file_sha256(model_path),
+        "metrics_path": to_storage_path(metrics_path) or str(metrics_path),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_names": feats,
+        "class_order": class_names,
+        "preprocessing": {
+            "fill_values": {name: float(medians.get(name, 0.0)) for name in feats},
+            "spectral_aggregation": "median per PRE/POST period",
+            "relative_delta": "(POST - PRE) / (abs(PRE) + 1e-6)",
+            "hansen_context": "sample AOI total/recent loss and dominant event share",
+        },
+        "training": {
+            "dataset": to_storage_path(DATASET) or str(DATASET),
+            "dataset_sha256": file_sha256(DATASET),
+            "rows": len(df),
+            "class_counts": dict(zip(class_names, np.bincount(y).tolist())),
+            "cv_description": cv_desc,
+        },
+        "software": {"xgboost": xgb.__version__, "numpy": np.__version__},
+    }
+    manifest_path = model_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"[ok] manifest: {manifest_path}")
 
     oof_df = pd.DataFrame({
         "sample_id": df["sample_id"].values,
@@ -245,7 +291,7 @@ def main() -> None:
         "y_pred": [class_names[i] for i in oof],
         **{f"proba_{name}": oof_proba[:, i] for i, name in enumerate(class_names)},
     })
-    oof_path = FOREST_MODELS_DIR / f"{MODEL_NAME}_oof.csv"
+    oof_path = model_dir / "oof.csv"
     oof_df.to_csv(oof_path, index=False, encoding="utf-8-sig")
     print(f"[ok] OOF predictions: {oof_path}")
 

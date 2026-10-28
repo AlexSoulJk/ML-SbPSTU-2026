@@ -15,12 +15,13 @@ import {
   startEventBackfill,
   startHansenCandidateMining,
   startMissingGeotiffInventory,
+  startModelLabeling,
   startSentinelBatch,
   startSentinelBundle,
   rejectHansenCandidates,
   uploadDataOperationSourceFile,
-} from "./samples.js?v=hansen-candidate-map-1";
-import { forestState } from "./state.js?v=hansen-candidate-map-1";
+} from "./samples.js?v=model-labeling-inference-3";
+import { forestState } from "./state.js?v=model-labeling-inference-3";
 
 
 let dataOperationsCallbacks = null;
@@ -504,6 +505,7 @@ function renderLabelingPlan() {
       <span>No inference starts automatically.</span>
       <span class="forestDataOperationsBadge">safe</span>
     </article>`;
+    $("forestDataOperationsLabelingStartBtn").disabled = true;
     return;
   }
   summary.innerHTML = metricsHtml({
@@ -521,21 +523,34 @@ function renderLabelingPlan() {
       <span class="forestDataOperationsBadge">${model.ready ? "ready" : "blocked"}</span>
     </article>
   `);
+  const predictionSummary = (event) => (event.existing_predictions || []).map((prediction) => {
+    const confidence = prediction.confidence === null || prediction.confidence === undefined
+      ? "n/a"
+      : Number(prediction.confidence).toFixed(3);
+    return `${prediction.source_name} ${prediction.label} ${confidence} (${prediction.source_version})`;
+  }).join("; ");
   const eventRows = (plan.events || []).map((event) => `
     <article class="forestDataOperationsRow ${event.input_status === "READY" ? "" : "warning"}">
       <span></span>
       <span><strong>${escapeHtml(event.event_year)} · ${escapeHtml(event.sample_id.slice(0, 8))}</strong><span>${escapeHtml(event.event_id.slice(0, 8))}</span></span>
-      <span><strong>PRE ${event.usable_counts.PRE || 0} · POST ${event.usable_counts.POST || 0}</strong><span>${escapeHtml(event.blockers.join(", ") || "inputs ready")}</span></span>
-      <span class="forestDataOperationsBadge">${escapeHtml(event.input_status)}</span>
+      <span><strong>PRE ${event.usable_counts.PRE || 0} · POST ${event.usable_counts.POST || 0}</strong><span>${escapeHtml(predictionSummary(event) || event.blockers.join(", ") || "inputs ready")}</span></span>
+      <span class="forestDataOperationsBadge">${escapeHtml(
+        (event.existing_predictions || []).length
+          ? `${event.existing_predictions.length} prediction(s)`
+          : event.input_status
+      )}</span>
     </article>
   `);
   rows.innerHTML = [...modelRows, ...eventRows].join("") || `<div class="meta">No events are assigned to this mining run.</div>`;
+  $("forestDataOperationsLabelingStartBtn").disabled = dataOperationsRunning()
+    || !plan.summary.inference_ready;
 }
 
 
 function activeJobHost() {
   const kind = forestState.dataOperationsJob?.kind || "";
   if (kind === "hansen_candidate_mining") return $("forestDataOperationsMiningJob");
+  if (kind === "model_labeling") return $("forestDataOperationsLabelingJob");
   if (kind === "sentinel_bundle_export") return $("forestDataOperationsBundleJob");
   if (kind === "sentinel_bundle_import") return $("forestDataOperationsImportJob");
   if (kind === "sentinel_missing_geotiff_inventory") return $("forestDataOperationsBundleJob");
@@ -546,12 +561,15 @@ function activeJobHost() {
 function renderJob() {
   [
     $("forestDataOperationsMiningJob"),
+    $("forestDataOperationsLabelingJob"),
     $("forestDataOperationsDownloadJob"),
     $("forestDataOperationsBundleJob"),
     $("forestDataOperationsImportJob"),
   ].forEach((host) => {
     if (host) host.innerHTML = "";
   });
+  const openLabelingButton = $("forestDataOperationsOpenLabelingBtn");
+  if (openLabelingButton) openLabelingButton.hidden = true;
   const job = forestState.dataOperationsJob;
   if (!job) return;
   const host = activeJobHost();
@@ -598,6 +616,19 @@ function renderJob() {
   $("forestDataOperationsDownloadStartBtn").disabled = running || !forestState.dataOperationsSelectedKeys.size;
   $("forestDataOperationsBundleStartBtn").disabled = running || !forestState.dataOperationsBundleSelectedIds.size;
   $("forestDataOperationsImportStartBtn").disabled = running || !forestState.dataOperationsImportPlan?.can_apply;
+  $("forestDataOperationsLabelingStartBtn").disabled = running
+    || !forestState.dataOperationsLabelingPlan?.summary?.inference_ready;
+  $("forestDataOperationsLabelingCancelBtn").disabled = !running
+    || forestState.dataOperationsJob?.kind !== "model_labeling";
+  const downloadMiningRunId = $("forestDataOperationsDownloadMiningRun").value;
+  if (openLabelingButton) {
+    openLabelingButton.hidden = !(
+      job.kind === "sentinel_batch_download"
+      && !running
+      && $("forestDataOperationsDownloadMode").value === "hansen_mining_run"
+      && downloadMiningRunId
+    );
+  }
   renderMiningPlan();
 }
 
@@ -848,6 +879,18 @@ async function pollJob(callbacks) {
   if (["sample_event_backfill", "sentinel_batch_download", "sentinel_bundle_import"].includes(job.kind)) {
     await callbacks.refreshForestData();
   }
+  if (job.kind === "model_labeling") {
+    const runId = $("forestDataOperationsLabelingRun").value;
+    if (runId) {
+      forestState.dataOperationsLabelingPlan = await planModelLabeling({
+        mining_run_id: runId,
+        remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
+        xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
+      });
+      renderLabelingPlan();
+    }
+    await callbacks.refreshForestData();
+  }
   renderJob();
 }
 
@@ -976,6 +1019,13 @@ export function initDataOperations(callbacks) {
     forestState.dataOperationsLabelingPlan = null;
     renderLabelingPlan();
   });
+  [
+    $("forestDataOperationsRemoteclipVersion"),
+    $("forestDataOperationsXgboostVersion"),
+  ].forEach((input) => input.addEventListener("input", () => {
+    forestState.dataOperationsLabelingPlan = null;
+    renderLabelingPlan();
+  }));
   $("forestDataOperationsLabelingPlanBtn").addEventListener("click", () => callbacks.run(async () => {
     const runId = $("forestDataOperationsLabelingRun").value;
     if (!runId) throw new Error("Select a mining run first.");
@@ -988,6 +1038,29 @@ export function initDataOperations(callbacks) {
     renderLabelingPlan();
     setStatus(`${forestState.dataOperationsLabelingPlan.summary.ready_inputs} event input(s) ready for inference`);
   }));
+  $("forestDataOperationsLabelingStartBtn").addEventListener("click", () => callbacks.run(async () => {
+    const runId = $("forestDataOperationsLabelingRun").value;
+    if (!runId) throw new Error("Select a mining run first.");
+    if (!forestState.dataOperationsLabelingPlan?.summary?.inference_ready) {
+      throw new Error("Build a ready inference plan first.");
+    }
+    const job = await startModelLabeling({
+      mining_run_id: runId,
+      remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
+      xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
+    });
+    watchJob(job, callbacks);
+  }));
+  $("forestDataOperationsOpenLabelingBtn").addEventListener("click", () => {
+    const runId = $("forestDataOperationsDownloadMiningRun").value;
+    if (!runId) return;
+    $("forestDataOperationsLabelingRun").value = runId;
+    forestState.dataOperationsLabelingPlan = null;
+    forestState.dataOperationsTab = "labeling";
+    renderLabelingPlan();
+    renderTab();
+    setStatus("Sentinel download finished; build the inference plan when model artifacts are ready");
+  });
 
   $("forestDataOperationsEventPlanBtn").addEventListener("click", () => callbacks.run(async () => {
     setStatus("checking Hansen events");
@@ -1141,6 +1214,7 @@ export function initDataOperations(callbacks) {
 
   [
     $("forestDataOperationsMiningCancelBtn"),
+    $("forestDataOperationsLabelingCancelBtn"),
     $("forestDataOperationsDownloadCancelBtn"),
     $("forestDataOperationsBundleCancelBtn"),
     $("forestDataOperationsImportCancelBtn"),

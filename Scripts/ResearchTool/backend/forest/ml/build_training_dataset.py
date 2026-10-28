@@ -13,7 +13,6 @@ for _p in _here.parents:
 
 import numpy as np
 import pandas as pd
-import rasterio
 from sqlalchemy import select, text
 
 from backend.config import FOREST_FEATURES_DIR, FOREST_CHANGE_CACHE_DIR
@@ -26,51 +25,17 @@ from backend.forest.models import (
 )
 from backend.forest.storage_paths import resolve_storage_path
 from backend.forest.ml.hansen_shape_features import loss_shape_features
+from backend.forest.ml.spectral_features import stats_for_tif
 
 # === КОНФИГ ===
 VALID_LABEL = "Valid"
 PERIODS = ("PRE", "POST")
 OUT_PARQUET = FOREST_FEATURES_DIR / "training_features_valid.parquet"
 
-BAND_ORDER = ["B02", "B03", "B04", "B08", "B11", "B12", "SCL", "dataMask"]
-INDEX_DEFS = {"ndvi": ("B08", "B04"), "nbr": ("B08", "B12"), "ndmi": ("B08", "B11")}
-SCL_BAD = {0, 1, 3, 8, 9, 10, 11}
-SCL_REPORT = (2, 4, 5, 6, 7)
-
-
 def load_valid_ids(db) -> set[str]:
     rows = db.execute(text("SELECT DISTINCT sample_id FROM forest_manual_validations WHERE validation = :v"),
                       {"v": VALID_LABEL}).all()
     return {r[0] for r in rows}
-
-
-def stats_for_tif(tif_path: Path) -> dict[str, float]:
-    if not tif_path.exists(): return {}
-    with rasterio.open(tif_path) as src:
-        if src.count != len(BAND_ORDER): return {}
-        data = {name: src.read(i + 1).astype("float32") for i, name in enumerate(BAND_ORDER)}
-    scl = data["SCL"].astype("int32")
-    dm = data["dataMask"]
-    bad_scl = np.isin(scl, list(SCL_BAD))
-    valid = (dm > 0) & ~bad_scl
-    out = {}
-    for name, (a_band, b_band) in INDEX_DEFS.items():
-        a, b = data[a_band], data[b_band]
-        denom = a + b
-        ok = valid & np.isfinite(a) & np.isfinite(b) & (denom != 0)
-        if not ok.any(): continue
-        idx = (a[ok] - b[ok]) / denom[ok]
-        out[f"{name}_mean"] = float(idx.mean())
-        out[f"{name}_median"] = float(np.median(idx))
-        out[f"{name}_std"] = float(idx.std())
-        out[f"{name}_p10"] = float(np.percentile(idx, 10))
-        out[f"{name}_p90"] = float(np.percentile(idx, 90))
-        out[f"{name}_valid_frac"] = float(ok.mean())
-    total = scl.size
-    for cls in SCL_REPORT:
-        out[f"scl_{cls}_frac"] = float((scl == cls).sum() / total)
-    return out
-
 
 def collect_hansen(db, valid_ids: set[str]) -> pd.DataFrame:
     samples = {s.sample_id: s for s in db.scalars(select(Sample)) if s.sample_id in valid_ids}

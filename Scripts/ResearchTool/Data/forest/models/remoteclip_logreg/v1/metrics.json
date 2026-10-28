@@ -1,0 +1,46 @@
+{
+  "grouped_cv_metrics": [
+    {
+      "accuracy_mean": 0.9647783251231528,
+      "accuracy_std": 0.03912769151194203,
+      "balanced_accuracy_mean": 0.9673076923076923,
+      "balanced_accuracy_std": 0.034353980932595854,
+      "f1_mean": 0.9623703703703703,
+      "f1_std": 0.040589348342916366,
+      "feature_variant": "PRE_POST",
+      "fold_runs": 5,
+      "metric_semantics": "wri_label_on_event_confirmed_manual_cohort",
+      "mode": "MANUAL_ONLY",
+      "roc_auc_mean": 0.9980769230769231,
+      "roc_auc_std": 0.0023552785988299706,
+      "split_strategy": "stratified_group"
+    }
+  ],
+  "producer_name": "REMOTECLIP_LOGREG",
+  "producer_version": "v1",
+  "selected_grouped_cv_metrics": {
+    "accuracy_mean": 0.9647783251231528,
+    "accuracy_std": 0.03912769151194203,
+    "balanced_accuracy_mean": 0.9673076923076923,
+    "balanced_accuracy_std": 0.034353980932595854,
+    "f1_mean": 0.9623703703703703,
+    "f1_std": 0.040589348342916366,
+    "feature_variant": "PRE_POST",
+    "fold_runs": 5,
+    "metric_semantics": "wri_label_on_event_confirmed_manual_cohort",
+    "mode": "MANUAL_ONLY",
+    "roc_auc_mean": 0.9980769230769231,
+    "roc_auc_std": 0.0023552785988299706,
+    "split_strategy": "stratified_group"
+  },
+  "smoke_probability_wildfire": 0.9988488691027387,
+  "training": {
+    "class_counts": {
+      "Logging": 78,
+      "Wildfire": 64
+    },
+    "record_ids_sha256": "8398c93786eacc47ded4a2f4e06242a91bedd201fe82f16ebb7eeafa3df1d8ed",
+    "records": 142,
+    "samples": 135
+  }
+}

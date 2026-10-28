@@ -57,6 +57,7 @@ from .event_review_service import configured_annotator_name, save_event_review
 from .import_service import import_file
 from .jobs import jobs
 from .model_labeling_service import build_model_labeling_plan
+from .model_inference_service import execute_model_labeling
 from .models import (
     ForestExport,
     HansenCandidateRun,
@@ -274,6 +275,10 @@ class ModelLabelingPlanRequest(BaseModel):
     mining_run_id: str
     remoteclip_version: str = Field(default="v1", max_length=128)
     xgboost_version: str = Field(default="v1", max_length=128)
+
+
+class ModelLabelingJobRequest(ModelLabelingPlanRequest):
+    event_ids: list[str] | None = None
 
 
 def json_or_none(value: str | None) -> Any:
@@ -900,6 +905,68 @@ def run_sentinel_batch_job(job_id: str, request: SentinelBatchRequest) -> None:
     except Exception as exc:
         db.rollback()
         jobs.update(job_id, status="failed", stage="failed", message=str(exc)[:500])
+    finally:
+        db.close()
+
+
+def run_model_labeling_job(job_id: str, request: ModelLabelingJobRequest) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        jobs.update(
+            job_id,
+            status="running",
+            stage="planning",
+            message="Checking model artifacts and event inputs",
+        )
+        result = execute_model_labeling(
+            db,
+            mining_run_id=request.mining_run_id,
+            remoteclip_version=request.remoteclip_version,
+            xgboost_version=request.xgboost_version,
+            event_ids=request.event_ids,
+            execution_id=job_id,
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        cancelled = job_cancel_requested(job_id) or result["status"] == "CANCELLED"
+        failed = int(result.get("failed") or 0)
+        jobs.update(
+            job_id,
+            status=(
+                "cancelled"
+                if cancelled
+                else "completed_with_errors"
+                if failed
+                else "completed"
+            ),
+            stage="cancelled" if cancelled else "done",
+            done=int(result.get("created") or 0) + int(result.get("reused") or 0) + failed,
+            message=(
+                f"Model labels: {result.get('created', 0)} created, "
+                f"{result.get('reused', 0)} reused, {failed} failed"
+            ),
+            result=result,
+        )
+    except Exception as exc:
+        db.rollback()
+        cancelled = job_cancel_requested(job_id) or "cancelled" in str(exc).lower()
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "failed",
+            stage="cancelled" if cancelled else "failed",
+            message=str(exc)[:500],
+        )
     finally:
         db.close()
 
@@ -1697,6 +1764,21 @@ def model_labeling_plan(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/model-labeling/jobs")
+def start_model_labeling_job(request: ModelLabelingJobRequest) -> dict[str, Any]:
+    job = jobs.create(
+        "model_labeling",
+        message=f"Queued model labeling for mining run {request.mining_run_id[:8]}",
+    )
+    thread = threading.Thread(
+        target=run_model_labeling_job,
+        args=(job.job_id, request),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
 
 
 @router.post("/data-operations/events/backfill/plan")

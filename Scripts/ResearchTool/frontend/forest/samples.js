@@ -202,6 +202,13 @@ export async function planModelLabeling(payload) {
   });
 }
 
+export async function startModelLabeling(payload) {
+  return api("/api/forest/data-operations/model-labeling/jobs", {
+    method: "POST",
+    body: payload,
+  });
+}
+
 export async function planSentinelBatch(payload) {
   return api("/api/forest/data-operations/sentinel-download/plan", {
     method: "POST",
