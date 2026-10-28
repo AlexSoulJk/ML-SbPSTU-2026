@@ -33,6 +33,8 @@ from backend.forest.candidate_service import (  # noqa: E402
     ALGORITHM_NAME,
     ALGORITHM_VERSION,
     CandidateMiningOptions,
+    candidate_hansen_preview_payload,
+    hansen_tile_inventory,
     materialize_candidates,
     mine_hansen_candidates,
     stable_id,
@@ -437,6 +439,65 @@ class DataOperationsTest(unittest.TestCase):
             self.assertEqual(result["items"][0]["primary_event_year"], 2020)
             self.assertGreater(result["items"][0]["dominant_event_aoi_percent"], 0.5)
 
+    def test_candidate_mining_never_converts_out_of_range_loss_code_to_future_year(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tile_path = temp_path / "60N_030E.tif"
+            data = np.full((200, 200), 85, dtype=np.uint8)
+            with rasterio.open(
+                tile_path,
+                "w",
+                driver="GTiff",
+                width=data.shape[1],
+                height=data.shape[0],
+                count=1,
+                dtype="uint8",
+                crs="EPSG:4326",
+                transform=from_bounds(34.0, 54.0, 36.0, 56.0, data.shape[1], data.shape[0]),
+                nodata=0,
+            ) as dataset:
+                dataset.write(data, 1)
+            self.db.add(
+                HansenTile(
+                    layer="lossyear",
+                    tile_id="60N_030E",
+                    version="GFC-test",
+                    local_path=str(tile_path),
+                )
+            )
+            self.db.commit()
+
+            with patch("backend.forest.candidate_service.FOREST_EXPORTS_DIR", temp_path / "exports"):
+                result = mine_hansen_candidates(
+                    self.db,
+                    CandidateMiningOptions(target_count=1, scan_resolution_m=300.0),
+                )
+
+            self.assertEqual(result["selected_count"], 0)
+            self.assertEqual(result["items"], [])
+            self.assertEqual(result["summary"]["rejections"]["TILE_SCAN_FAILED"], 1)
+
+    def test_candidate_inventory_rejects_treecover_registered_as_lossyear(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tile_path = Path(temp_dir) / "treecover2000" / "60N_030E.tif"
+            tile_path.parent.mkdir(parents=True)
+            tile_path.touch()
+            self.db.add(
+                HansenTile(
+                    layer="lossyear",
+                    tile_id="60N_030E",
+                    version="GFC-test",
+                    local_path=str(tile_path),
+                )
+            )
+            self.db.commit()
+
+            inventory, checks = hansen_tile_inventory(self.db)
+
+            self.assertEqual(inventory, {})
+            self.assertEqual(checks[0]["status"], "invalid")
+            self.assertIn("treecover2000", checks[0]["error"])
+
     def test_whole_hansen_tile_preview_is_cached_and_keeps_year_palette(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -495,6 +556,93 @@ class DataOperationsTest(unittest.TestCase):
             self.assertFalse(first["cache_hit"])
             self.assertTrue(second["cache_hit"])
             self.assertTrue(first["png_url"].startswith("/cache/test/60N_030E.png?v="))
+
+    def test_candidate_hansen_preview_is_clipped_to_aoi_and_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tile_path = temp_path / "source" / "60N_030E.tif"
+            tile_path.parent.mkdir(parents=True)
+            data = np.full((400, 400), 20, dtype=np.uint8)
+            data[:, 200:] = 85
+            with rasterio.open(
+                tile_path,
+                "w",
+                driver="GTiff",
+                width=data.shape[1],
+                height=data.shape[0],
+                count=1,
+                dtype="uint8",
+                crs="EPSG:4326",
+                transform=from_bounds(34.0, 54.0, 36.0, 56.0, data.shape[1], data.shape[0]),
+                nodata=0,
+            ) as dataset:
+                dataset.write(data, 1)
+
+            candidate = HansenCandidate(
+                candidate_id="candidate-preview",
+                algorithm_version=ALGORITHM_VERSION,
+                hansen_dataset_version="GFC-test",
+                lat=55.0,
+                lon=35.0,
+                aoi_size_m=2000.0,
+                aoi_bbox_json="[34.98, 54.98, 35.02, 55.02]",
+                primary_event_year=2020,
+                event_years_json="[2020]",
+                has_multiple_events=False,
+                component_area_ha=20.0,
+                dominant_loss_area_ha=20.0,
+                dominant_loss_fraction=1.0,
+                total_loss_area_ha=20.0,
+                post_2016_loss_aoi_percent=5.0,
+                dominant_event_aoi_percent=5.0,
+                pixel_count=200,
+                source_tile_ids_json='["60N_030E"]',
+                component_key="60N_030E:2020:preview",
+                metadata_json=json.dumps({"min_event_year": 2016}),
+            )
+            self.db.add_all(
+                [
+                    candidate,
+                    HansenTile(
+                        layer="lossyear",
+                        tile_id="60N_030E",
+                        version="GFC-test",
+                        local_path=str(tile_path),
+                    ),
+                ]
+            )
+            self.db.commit()
+
+            preview_cache = temp_path / "cache" / "hansen"
+            with (
+                patch(
+                    "backend.forest.candidate_service.FOREST_HANSEN_CACHE_DIR",
+                    preview_cache,
+                ),
+                patch(
+                    "backend.forest.candidate_service.cache_url",
+                    side_effect=lambda path: f"/cache/test/{Path(path).name}",
+                ),
+            ):
+                first = candidate_hansen_preview_payload(self.db, candidate.candidate_id)
+                second = candidate_hansen_preview_payload(self.db, candidate.candidate_id)
+
+            png_path = (
+                preview_cache
+                / "candidate_previews"
+                / "GFC-test"
+                / candidate.candidate_id
+                / "all_loss.png"
+            )
+            with Image.open(png_path) as image:
+                self.assertGreater(image.width, 0)
+                self.assertGreater(image.height, 0)
+                self.assertGreater(image.getchannel("A").getextrema()[1], 0)
+            self.assertEqual([row["year"] for row in first["legend"]], [2020])
+            self.assertFalse(first["cache_hit"])
+            self.assertTrue(second["cache_hit"])
+            self.assertEqual(first["candidate_id"], candidate.candidate_id)
+            self.assertTrue(first["png_url"].startswith("/cache/test/all_loss.png?v="))
 
     def test_db_sync_can_insert_versioned_label_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

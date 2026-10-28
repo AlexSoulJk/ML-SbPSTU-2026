@@ -157,6 +157,10 @@ export async function listHansenCandidateRuns(limit = 25) {
   return api(`/api/forest/data-operations/hansen-mining/runs?limit=${encodeURIComponent(limit)}`);
 }
 
+export async function getHansenCandidatePreview(candidateId) {
+  return api(`/api/forest/data-operations/hansen-mining/candidates/${encodeURIComponent(candidateId)}/preview`);
+}
+
 export async function startHansenCandidateMining(payload) {
   return api("/api/forest/data-operations/hansen-mining/jobs", {
     method: "POST",

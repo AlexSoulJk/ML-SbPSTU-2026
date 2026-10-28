@@ -4,12 +4,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import joblib
 import numpy as np
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from ml_tests.dataset import season_for_datetime, validation_cohort
+from ml_tests.artifacts import export_remoteclip_classifier
+from ml_tests.config import ExperimentConfig
 from ml_tests.embeddings import EmbeddingCache, l2_normalize
 from ml_tests.event_links import apply_dominant_event_backfill, plan_dominant_event_backfill
 from ml_tests.experiments import records_for_variant
@@ -23,6 +27,7 @@ from ResearchTool.backend.forest.models import (
     SampleEventDownload,
     SentinelDownload,
 )
+from ResearchTool.backend.forest.model_labeling_service import model_artifact_status
 
 
 def sample(sample_id: str) -> Sample:
@@ -196,6 +201,91 @@ class SplitAndWeightTests(unittest.TestCase):
         self.assertEqual(weights, {"s1": 1.0, "s2": 1.0})
 
 
+class ModelArtifactTests(unittest.TestCase):
+    def test_remoteclip_artifact_round_trip_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / "remoteclip.pt"
+            checkpoint.write_bytes(b"test-checkpoint")
+            config_path = root / "config.json"
+            config_path.write_text("{}", encoding="utf-8")
+            config = ExperimentConfig(
+                path=config_path,
+                profile_name="quick",
+                data={
+                    "paths": {"checkpoint": str(checkpoint)},
+                    "embedding": {
+                        "model_name": "ViT-B-32",
+                        "preprocessing_version": "test-preprocess-v1",
+                        "normalization_version": "l2_v1",
+                    },
+                    "classifier": {
+                        "class_weight": "balanced",
+                        "max_iter": 200,
+                        "solver": "liblinear",
+                        "random_state": 42,
+                    },
+                    "profiles": {"quick": {"n_splits": 2, "seeds": [42]}},
+                },
+            )
+            event_records = []
+            for index, (label, vector) in enumerate(
+                [
+                    ("Logging", [1.0, 0.0]),
+                    ("Logging", [0.9, 0.1]),
+                    ("Wildfire", [0.0, 1.0]),
+                    ("Wildfire", [0.1, 0.9]),
+                ]
+            ):
+                event_records.append(
+                    {
+                        "record_id": f"event-{index}",
+                        "event_id": f"event-{index}",
+                        "sample_id": f"sample-{index}",
+                        "label": label,
+                        "validation_cohort": "MANUAL_VALID",
+                        "vectors": {"POST": np.asarray(vector, dtype=np.float32)},
+                    }
+                )
+            baseline_metrics = [
+                {
+                    "feature_variant": "POST",
+                    "mode": "MANUAL_ONLY",
+                    "split_strategy": "stratified_group",
+                    "balanced_accuracy_mean": 0.8,
+                    "roc_auc_mean": 0.9,
+                    "f1_mean": 0.75,
+                }
+            ]
+            models_root = root / "models"
+            with (
+                patch("ml_tests.artifacts.FOREST_MODELS_DIR", models_root),
+                patch(
+                    "ResearchTool.backend.forest.model_labeling_service.FOREST_MODELS_DIR",
+                    models_root,
+                ),
+            ):
+                result = export_remoteclip_classifier(
+                    event_records,
+                    baseline_metrics,
+                    config,
+                    {"sha256": "database-test-sha"},
+                    version="test-v1",
+                )
+                artifact_status = model_artifact_status("REMOTECLIP_LOGREG", "test-v1")
+
+            model_dir = models_root / "remoteclip_logreg" / "test-v1"
+            artifact = joblib.load(model_dir / "classifier.joblib")
+            manifest = json.loads((model_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(artifact["feature_variant"], "POST")
+            self.assertEqual(artifact["class_order"], ["Logging", "Wildfire"])
+            self.assertEqual(manifest["artifact_sha256"], result["artifact_sha256"])
+            self.assertEqual(manifest["required_periods"], ["POST"])
+            self.assertEqual(manifest["round_trip_smoke_test"]["status"], "passed")
+            self.assertEqual(result["training"]["records"], 4)
+            self.assertTrue(artifact_status["ready"], artifact_status["errors"])
+
+
 class NotebookTests(unittest.TestCase):
     def test_notebook_is_thin_and_valid_json(self) -> None:
         path = Path(__file__).resolve().parents[1] / "forest_ml_experiments.ipynb"
@@ -209,6 +299,8 @@ class NotebookTests(unittest.TestCase):
         self.assertIn("ForestMLPipeline", code)
         self.assertIn("REUSE_SAVED_BASELINE", code)
         self.assertIn("baseline_metrics_html", code)
+        self.assertIn("SAVE_REMOTECLIP_ARTIFACT", code)
+        self.assertIn("plan_remoteclip_model_export", code)
         self.assertEqual(notebook["nbformat"], 4)
 
     def test_metrics_table_contains_actual_values(self) -> None:

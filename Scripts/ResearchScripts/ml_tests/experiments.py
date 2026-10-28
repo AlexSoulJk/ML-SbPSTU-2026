@@ -140,6 +140,14 @@ def _fit_model(
     return scaler, model
 
 
+def fit_classifier(
+    train_records: list[dict[str, Any]],
+    classifier_config: dict[str, Any],
+) -> tuple[StandardScaler, LogisticRegression]:
+    """Fit the reusable scaler/classifier pair used by production artifact export."""
+    return _fit_model(train_records, classifier_config)
+
+
 def _evaluate_model(
     scaler: StandardScaler,
     model: LogisticRegression,

@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from .artifacts import export_remoteclip_classifier, plan_remoteclip_export
 from .config import ExperimentConfig, PROJECT_ROOT
 from .dataset import build_event_manifest, database_fingerprint
 from .embeddings import ImageEmbedder, compute_manifest_embeddings
@@ -249,6 +250,54 @@ class ForestMLPipeline:
             self._save_summary()
             return result
         return None
+
+    def plan_remoteclip_model_export(
+        self,
+        baseline_result: dict[str, Any],
+        *,
+        version: str = "v1",
+        training_mode: str = "MANUAL_ONLY",
+        feature_variant: str | None = None,
+    ) -> dict[str, Any]:
+        plan = plan_remoteclip_export(
+            baseline_result["baseline_metrics"],
+            version=version,
+            training_mode=training_mode,
+            feature_variant=feature_variant,
+        )
+        self.summary["remoteclip_export_plan"] = plan
+        self._save_summary()
+        return plan
+
+    def export_remoteclip_model(
+        self,
+        manifest: list[dict[str, Any]],
+        embeddings,
+        baseline_result: dict[str, Any],
+        *,
+        version: str = "v1",
+        training_mode: str = "MANUAL_ONLY",
+        feature_variant: str | None = None,
+        decision_threshold: float = 0.5,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        if not embeddings:
+            raise ValueError("RemoteCLIP export requires embeddings loaded from or written to cache.")
+        event_records = aggregate_event_embeddings(manifest, embeddings)
+        result = export_remoteclip_classifier(
+            event_records,
+            baseline_result["baseline_metrics"],
+            self.config,
+            self.database_snapshot,
+            version=version,
+            training_mode=training_mode,
+            feature_variant=feature_variant,
+            decision_threshold=decision_threshold,
+            overwrite=overwrite,
+        )
+        self.summary["remoteclip_artifact"] = result
+        self._save_summary()
+        return result
 
     def _save_summary(self) -> None:
         self.summary["updated_at"] = datetime.now(timezone.utc).isoformat()

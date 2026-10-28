@@ -1,5 +1,5 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=hansen-tile-colors-2";
-import { initDataOperations } from "./data_operations.js?v=hansen-whole-tile-1";
+import { clearForestLayers, renderForestMap } from "./map.js?v=hansen-candidate-map-1";
+import { initDataOperations } from "./data_operations.js?v=hansen-candidate-map-1";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
@@ -21,8 +21,8 @@ import {
   searchSentinel,
   startHansenBatch,
   startSentinelCacheDownload,
-} from "./samples.js?v=hansen-whole-tile-1";
-import { forestState } from "./state.js?v=hansen-whole-tile-1";
+} from "./samples.js?v=hansen-candidate-map-1";
+import { forestState } from "./state.js?v=hansen-candidate-map-1";
 
 function $(id) {
   return document.getElementById(id);

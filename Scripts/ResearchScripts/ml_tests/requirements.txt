@@ -1,5 +1,6 @@
 -r ../../ResearchTool/requirements.txt
 scikit-learn>=1.5
+joblib>=1.4
 matplotlib>=3.9
 torch>=2.4
 open_clip_torch>=2.26

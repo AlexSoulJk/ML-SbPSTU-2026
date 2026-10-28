@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 from ..config import FOREST_HANSEN_CACHE_DIR
 from .event_service import sync_hansen_events
 from .geometry import DEFAULT_SAMPLE_PLOT_M, sample_geometries
-from .hansen_provider import HANSEN_VERSION, download_hansen_tile, tile_id_for_lonlat, tile_model
+from .hansen_provider import (
+    HANSEN_MAX_LOSS_CODE,
+    HANSEN_VERSION,
+    download_hansen_tile,
+    tile_id_for_lonlat,
+    tile_model,
+)
 from .models import HansenAnalysis, HansenMask, HansenTile, Sample, SampleStatus, utc_now
 from .storage_paths import forest_cache_url, resolve_storage_path, to_storage_path
 
@@ -121,14 +127,14 @@ def loss_year_legend(loss: np.ndarray) -> list[dict[str, Any]]:
             "color": loss_year_color_hex(int(code)),
         }
         for code in codes.tolist()
-        if int(code) > 0
+        if 0 < int(code) <= HANSEN_MAX_LOSS_CODE
     ]
 
 
 def rgba_loss_year(loss: np.ndarray) -> np.ndarray:
     data = np.asarray(loss, dtype=np.uint8)
     rgba = np.zeros((*data.shape, 4), dtype=np.uint8)
-    for code in np.unique(data[data > 0]).tolist():
+    for code in np.unique(data[(data > 0) & (data <= HANSEN_MAX_LOSS_CODE)]).tolist():
         color = loss_year_color_rgb(int(code))
         mask = data == code
         rgba[mask, 0] = color[0]
@@ -552,7 +558,8 @@ def analyze_sample_hansen(
 
     report(progress, "analysis", "Computing loss histogram")
     area_ha = pixel_area_ha(loss_profile["transform"], loss_profile.get("crs"), sample.lat)
-    loss_codes, counts = np.unique(loss[loss > 0], return_counts=True)
+    valid_loss = loss[(loss > 0) & (loss <= HANSEN_MAX_LOSS_CODE)]
+    loss_codes, counts = np.unique(valid_loss, return_counts=True)
     histogram = [
         {
             "year": 2000 + int(code),

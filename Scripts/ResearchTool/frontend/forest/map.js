@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=hansen-whole-tile-1";
+import { forestState } from "./state.js?v=hansen-candidate-map-1";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 

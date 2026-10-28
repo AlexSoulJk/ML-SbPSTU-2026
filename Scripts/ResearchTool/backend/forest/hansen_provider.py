@@ -10,6 +10,8 @@ from .storage_paths import to_storage_path
 
 
 HANSEN_VERSION = "GFC-2025-v1.13"
+HANSEN_LAST_LOSS_YEAR = 2025
+HANSEN_MAX_LOSS_CODE = HANSEN_LAST_LOSS_YEAR - 2000
 HANSEN_BASE_URL = f"https://storage.googleapis.com/earthenginepartners-hansen/{HANSEN_VERSION}"
 HANSEN_LAYERS = {"lossyear", "treecover2000"}
 ProgressCallback = Callable[[str, str], None]

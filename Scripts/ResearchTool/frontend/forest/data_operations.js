@@ -2,6 +2,7 @@ import {
   cancelForestJob,
   fillHansenCandidateRun,
   getForestJob,
+  getHansenCandidatePreview,
   listHansenCandidateRuns,
   listBundleImportCandidates,
   materializeHansenCandidates,
@@ -18,8 +19,11 @@ import {
   startSentinelBundle,
   rejectHansenCandidates,
   uploadDataOperationSourceFile,
-} from "./samples.js?v=hansen-whole-tile-1";
-import { forestState } from "./state.js?v=hansen-whole-tile-1";
+} from "./samples.js?v=hansen-candidate-map-1";
+import { forestState } from "./state.js?v=hansen-candidate-map-1";
+
+
+let dataOperationsCallbacks = null;
 
 
 function $(id) {
@@ -120,6 +124,64 @@ function selectedMiningRows() {
 }
 
 
+function resetMiningCandidateFocus() {
+  forestState.dataOperationsMiningPreviewRequestId += 1;
+  forestState.dataOperationsMiningActiveCandidateId = null;
+  forestState.dataOperationsMiningPreview = null;
+  forestState.dataOperationsMiningPreviewCandidateId = null;
+  forestState.dataOperationsMiningPreviewLoading = false;
+  forestState.dataOperationsMiningPreviewError = null;
+}
+
+
+function activeMiningCandidate() {
+  const candidateId = forestState.dataOperationsMiningActiveCandidateId;
+  return (forestState.dataOperationsMiningRun?.items || []).find(
+    (row) => row.candidate_id === candidateId,
+  ) || null;
+}
+
+
+function miningCandidateBounds(row) {
+  const bbox = row?.aoi_bbox || [];
+  return bbox.length === 4 ? [[bbox[1], bbox[0]], [bbox[3], bbox[2]]] : null;
+}
+
+
+function renderMiningLegend() {
+  const host = forestState.dataOperationsMiningLegendHost;
+  if (!host) return;
+  const candidate = activeMiningCandidate();
+  if (!candidate) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  if (forestState.dataOperationsMiningPreviewLoading) {
+    host.innerHTML = `<strong>#${escapeHtml(candidate.rank || "–")} · loading Hansen…</strong>`;
+    return;
+  }
+  if (forestState.dataOperationsMiningPreviewError) {
+    host.innerHTML = `<strong>Hansen unavailable</strong><span>${escapeHtml(forestState.dataOperationsMiningPreviewError)}</span>`;
+    return;
+  }
+  const preview = forestState.dataOperationsMiningPreview;
+  if (!preview || preview.candidate_id !== candidate.candidate_id) {
+    host.innerHTML = `<strong>#${escapeHtml(candidate.rank || "–")} · select to load Hansen</strong>`;
+    return;
+  }
+  host.innerHTML = `
+    <strong>#${escapeHtml(candidate.rank || "–")} · Hansen loss year</strong>
+    <div class="forestMiningHansenLegendItems">
+      ${(preview.legend || []).map((item) => `
+        <span title="${escapeHtml(item.year)}"><i style="background:${escapeHtml(item.color)}"></i>${escapeHtml(item.year)}</span>
+      `).join("") || `<span>No recent loss pixels</span>`}
+    </div>
+  `;
+}
+
+
 function renderMiningRuns() {
   const select = $("forestDataOperationsMiningRun");
   const labeling = $("forestDataOperationsLabelingRun");
@@ -157,8 +219,22 @@ function ensureMiningMap() {
       maxZoom: 19,
       attribution: "&copy; OpenStreetMap contributors",
     }).addTo(map);
+    map.createPane("forestMiningHansenPane");
+    map.getPane("forestMiningHansenPane").style.zIndex = 350;
+    map.getPane("forestMiningHansenPane").style.pointerEvents = "none";
+    map.createPane("forestMiningCandidatePane");
+    map.getPane("forestMiningCandidatePane").style.zIndex = 450;
     forestState.dataOperationsMiningMap = map;
     forestState.dataOperationsMiningMapLayers = window.L.layerGroup().addTo(map);
+    const legendControl = window.L.control({ position: "bottomright" });
+    legendControl.onAdd = () => {
+      const legendHost = window.L.DomUtil.create("div", "forestMiningHansenLegend");
+      legendHost.hidden = true;
+      window.L.DomEvent.disableClickPropagation(legendHost);
+      forestState.dataOperationsMiningLegendHost = legendHost;
+      return legendHost;
+    };
+    legendControl.addTo(map);
   }
   window.setTimeout(() => forestState.dataOperationsMiningMap?.invalidateSize(), 0);
   return forestState.dataOperationsMiningMap;
@@ -170,13 +246,39 @@ function renderMiningMap() {
   const group = forestState.dataOperationsMiningMapLayers;
   if (!map || !group) return;
   group.clearLayers();
+  if (forestState.dataOperationsMiningHansenLayer) {
+    map.removeLayer(forestState.dataOperationsMiningHansenLayer);
+    forestState.dataOperationsMiningHansenLayer = null;
+  }
   const run = forestState.dataOperationsMiningRun;
-  if (!run) return;
+  if (!run) {
+    renderMiningLegend();
+    return;
+  }
+  const activeCandidateId = forestState.dataOperationsMiningActiveCandidateId;
+  const preview = forestState.dataOperationsMiningPreview;
+  if (
+    preview?.png_url
+    && preview?.bbox?.length === 4
+    && preview.candidate_id === activeCandidateId
+  ) {
+    forestState.dataOperationsMiningHansenLayer = window.L.imageOverlay(
+      preview.png_url,
+      [[preview.bbox[1], preview.bbox[0]], [preview.bbox[3], preview.bbox[2]]],
+      {
+        pane: "forestMiningHansenPane",
+        opacity: 0.72,
+        interactive: false,
+        className: "forestHansenOverlay pixelated",
+      },
+    ).addTo(map);
+  }
   const bounds = [];
   (run.items || []).forEach((row) => {
     const bbox = row.aoi_bbox || [];
     if (bbox.length !== 4) return;
     const selected = forestState.dataOperationsMiningSelectedIds.has(row.candidate_id);
+    const active = row.candidate_id === activeCandidateId;
     const rejected = ["USER_REJECTED", "REJECTED"].includes(row.decision);
     const color = row.created_sample_id
       ? "#2f6b8a"
@@ -189,29 +291,95 @@ function renderMiningMap() {
             : "#71827e";
     const rectangleBounds = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]];
     const layer = window.L.rectangle(rectangleBounds, {
-      color,
-      weight: selected ? 2 : 1,
+      pane: "forestMiningCandidatePane",
+      color: active ? "#d45d3f" : color,
+      weight: active ? 4 : selected ? 2 : 1,
       fillColor: color,
-      fillOpacity: selected ? 0.28 : 0.12,
+      fillOpacity: active ? 0.08 : selected ? 0.28 : 0.12,
     }).addTo(group);
     layer.bindTooltip(
       `#${row.rank || "–"} · ${row.primary_event_year} · ${Number(row.dominant_event_aoi_percent || 0).toFixed(2)}%`,
     );
-    if (!row.created_sample_id && !rejected) {
-      layer.on("click", () => {
-        if (forestState.dataOperationsMiningSelectedIds.has(row.candidate_id)) {
-          forestState.dataOperationsMiningSelectedIds.delete(row.candidate_id);
-        } else {
-          forestState.dataOperationsMiningSelectedIds.add(row.candidate_id);
-        }
-        renderMiningPlan();
-      });
+    layer.on("click", () => {
+      dataOperationsCallbacks?.run(() => focusMiningCandidate(row, { fit: true, scrollRow: true }));
+    });
+    if (active) {
+      window.L.circleMarker([row.lat, row.lon], {
+        pane: "forestMiningCandidatePane",
+        radius: 6,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#d45d3f",
+        fillOpacity: 1,
+        interactive: false,
+      }).addTo(group);
     }
     bounds.push(...rectangleBounds);
   });
   if (bounds.length && forestState.dataOperationsMiningMapRunId !== run.run_id) {
     map.fitBounds(bounds, { padding: [16, 16], maxZoom: 8 });
     forestState.dataOperationsMiningMapRunId = run.run_id;
+  }
+  renderMiningLegend();
+}
+
+
+function scrollMiningCandidateRow(candidateId) {
+  window.requestAnimationFrame(() => {
+    const row = [...document.querySelectorAll("[data-mining-candidate-row]")].find(
+      (element) => element.dataset.miningCandidateRow === candidateId,
+    );
+    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+}
+
+
+async function focusMiningCandidate(row, { fit = true, scrollRow = false } = {}) {
+  if (!row) return;
+  const candidateId = row.candidate_id;
+  forestState.dataOperationsMiningPreviewRequestId += 1;
+  const requestId = forestState.dataOperationsMiningPreviewRequestId;
+  forestState.dataOperationsMiningActiveCandidateId = candidateId;
+  forestState.dataOperationsMiningPreviewError = null;
+  const cached = forestState.dataOperationsMiningPreviewCache.get(candidateId) || null;
+  forestState.dataOperationsMiningPreview = cached;
+  forestState.dataOperationsMiningPreviewCandidateId = cached ? candidateId : null;
+  forestState.dataOperationsMiningPreviewLoading = !cached;
+  renderMiningPlan();
+
+  const map = ensureMiningMap();
+  const bounds = miningCandidateBounds(row);
+  if (fit && map && bounds) map.fitBounds(bounds, { padding: [32, 32], maxZoom: 13 });
+  if (scrollRow) scrollMiningCandidateRow(candidateId);
+  if (cached) {
+    setStatus(`candidate #${row.rank || "–"}: Hansen preview ready`);
+    return;
+  }
+
+  setStatus(`loading Hansen for candidate #${row.rank || "–"}`);
+  try {
+    const preview = await getHansenCandidatePreview(candidateId);
+    if (
+      requestId !== forestState.dataOperationsMiningPreviewRequestId
+      || candidateId !== forestState.dataOperationsMiningActiveCandidateId
+    ) return;
+    forestState.dataOperationsMiningPreviewCache.set(candidateId, preview);
+    forestState.dataOperationsMiningPreview = preview;
+    forestState.dataOperationsMiningPreviewCandidateId = candidateId;
+    forestState.dataOperationsMiningPreviewError = null;
+    setStatus(`candidate #${row.rank || "–"}: Hansen ${preview.cache_hit ? "cache" : "preview built"}`);
+  } catch (error) {
+    if (requestId !== forestState.dataOperationsMiningPreviewRequestId) return;
+    forestState.dataOperationsMiningPreview = null;
+    forestState.dataOperationsMiningPreviewCandidateId = candidateId;
+    forestState.dataOperationsMiningPreviewError = error.message || String(error);
+    throw error;
+  } finally {
+    if (requestId === forestState.dataOperationsMiningPreviewRequestId) {
+      forestState.dataOperationsMiningPreviewLoading = false;
+      renderMiningMap();
+      renderMiningLegend();
+    }
   }
 }
 
@@ -232,6 +400,12 @@ function renderMiningPlan() {
     return;
   }
   const rows = run.items || [];
+  if (
+    forestState.dataOperationsMiningActiveCandidateId
+    && !rows.some((row) => row.candidate_id === forestState.dataOperationsMiningActiveCandidateId)
+  ) {
+    resetMiningCandidateFocus();
+  }
   const selected = selectedMiningRows();
   const sweep = run.summary?.threshold_sweep || {};
   summaryHost.innerHTML = metricsHtml({
@@ -255,10 +429,11 @@ function renderMiningPlan() {
   rowsHost.innerHTML = rows.map((row) => {
     const selectable = !row.created_sample_id && !["USER_REJECTED", "REJECTED"].includes(row.decision);
     const checked = selectable && forestState.dataOperationsMiningSelectedIds.has(row.candidate_id);
-    const className = row.decision === "USER_REJECTED" ? "error" : row.decision === "ELIGIBLE" ? "warning" : "";
+    const active = row.candidate_id === forestState.dataOperationsMiningActiveCandidateId;
+    const className = `${row.decision === "USER_REJECTED" ? "error" : row.decision === "ELIGIBLE" ? "warning" : ""} ${active ? "activeCandidate" : ""}`.trim();
     const osmUrl = `https://www.openstreetmap.org/?mlat=${encodeURIComponent(row.lat)}&mlon=${encodeURIComponent(row.lon)}#map=12/${encodeURIComponent(row.lat)}/${encodeURIComponent(row.lon)}`;
     return `
-      <article class="forestDataOperationsRow ${className}">
+      <article class="forestDataOperationsRow ${className}" data-mining-candidate-row="${escapeHtml(row.candidate_id)}" tabindex="0">
         <input type="checkbox" data-mining-candidate-id="${escapeHtml(row.candidate_id)}" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"} />
         <span>
           <strong>#${escapeHtml(row.rank || "–")} · ${escapeHtml(row.primary_event_year)} · ${escapeHtml(row.candidate_id.slice(0, 8))}</strong>
@@ -279,6 +454,17 @@ function renderMiningPlan() {
       else forestState.dataOperationsMiningSelectedIds.delete(id);
       renderMiningPlan();
     });
+  });
+  rowsHost.querySelectorAll("[data-mining-candidate-row]").forEach((article) => {
+    const activate = (event) => {
+      if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+      if (event.target.closest("input, a, button")) return;
+      event.preventDefault();
+      const row = rows.find((item) => item.candidate_id === article.dataset.miningCandidateRow);
+      dataOperationsCallbacks?.run(() => focusMiningCandidate(row, { fit: true }));
+    };
+    article.addEventListener("click", activate);
+    article.addEventListener("keydown", activate);
   });
   const plannedIds = rows.filter((row) => row.decision === "SELECTED" && !row.created_sample_id).map((row) => row.candidate_id);
   $("forestDataOperationsMiningSelectAll").checked = plannedIds.length > 0
@@ -683,6 +869,7 @@ async function loadImportCandidates() {
 
 
 export function initDataOperations(callbacks) {
+  dataOperationsCallbacks = callbacks;
   const storedActor = window.localStorage.getItem("forestAnnotatorName") || "";
   $("forestDataOperationsMiningActor").value = storedActor;
   renderMiningPlan();
@@ -725,11 +912,13 @@ export function initDataOperations(callbacks) {
         .filter((row) => row.decision === "SELECTED" && !row.created_sample_id)
         .map((row) => row.candidate_id),
     );
+    resetMiningCandidateFocus();
     renderMiningPlan();
   });
   $("forestDataOperationsMiningPlanBtn").addEventListener("click", () => callbacks.run(async () => {
     forestState.dataOperationsMiningRun = null;
     forestState.dataOperationsMiningSelectedIds = new Set();
+    resetMiningCandidateFocus();
     renderMiningPlan();
     setStatus("starting Hansen candidate mining");
     const job = await startHansenCandidateMining(miningPayload());

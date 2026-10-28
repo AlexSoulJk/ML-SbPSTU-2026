@@ -6,6 +6,7 @@ import json
 import math
 import uuid
 from collections import Counter, defaultdict, deque
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -14,7 +15,10 @@ import numpy as np
 import rasterio
 from affine import Affine
 from rasterio.enums import Resampling
+from rasterio.features import geometry_mask
 from rasterio.mask import mask as rio_mask
+from rasterio.merge import merge as rio_merge
+from rasterio.transform import array_bounds
 from rasterio.warp import transform_geom
 from scipy import ndimage
 from shapely.geometry import shape
@@ -22,12 +26,23 @@ from shapely.ops import transform as shapely_transform
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..config import FOREST_EXPORTS_DIR
+from ..config import FOREST_EXPORTS_DIR, FOREST_HANSEN_CACHE_DIR
 from .event_review_service import create_draft_review, require_actor_name
 from .event_service import event_id_for
 from .geometry import haversine_m, sample_geometries, transformers_for_lonlat
-from .hansen_provider import HANSEN_VERSION, tile_id_for_lonlat
-from .hansen_service import pixel_area_ha
+from .hansen_provider import (
+    HANSEN_LAST_LOSS_YEAR,
+    HANSEN_MAX_LOSS_CODE,
+    HANSEN_VERSION,
+    tile_id_for_lonlat,
+)
+from .hansen_service import (
+    cache_url,
+    loss_year_legend,
+    pixel_area_ha,
+    rgba_loss_year,
+    write_png,
+)
 from .models import (
     HansenCandidate,
     HansenCandidateExclusion,
@@ -49,6 +64,7 @@ MIN_LOSS_CODE = MIN_EVENT_YEAR - 2000
 MULTIPLE_EVENT_MIN_COUNT = 3
 THRESHOLD_SWEEP = (0.5, 1.0, 2.5, 5.0, 10.0)
 RUN_DECISIONS = {"ELIGIBLE", "SELECTED", "USER_REJECTED", "REJECTED"}
+CANDIDATE_PREVIEW_SCHEMA_VERSION = 1
 
 ProgressCallback = Callable[[str, str, int, int], None]
 CancelCallback = Callable[[], bool]
@@ -75,6 +91,10 @@ class CandidateMiningOptions:
             raise ValueError("min_dominant_event_aoi_percent must be in (0, 100]")
         if self.min_event_year < MIN_EVENT_YEAR:
             raise ValueError(f"min_event_year cannot be earlier than {MIN_EVENT_YEAR}")
+        if self.min_event_year > HANSEN_LAST_LOSS_YEAR:
+            raise ValueError(
+                f"min_event_year cannot be later than Hansen coverage ({HANSEN_LAST_LOSS_YEAR})"
+            )
         if not 60 <= self.scan_resolution_m <= 1000:
             raise ValueError("scan_resolution_m must be between 60 and 1000 metres")
 
@@ -132,7 +152,8 @@ def hansen_tile_inventory(db: Session) -> tuple[dict[str, TileInventoryItem], li
     for row in rows:
         if row.tile_id in inventory:
             continue
-        path = resolve_storage_path(row.local_path)
+        registered_path = resolve_storage_path(row.local_path)
+        path = registered_path
         check = {
             "tile_id": row.tile_id,
             "version": row.version,
@@ -140,6 +161,28 @@ def hansen_tile_inventory(db: Session) -> tuple[dict[str, TileInventoryItem], li
             "status": "ok",
             "error": None,
         }
+        if "treecover2000" in {part.casefold() for part in path.parts}:
+            canonical = (
+                FOREST_HANSEN_CACHE_DIR
+                / row.version
+                / "lossyear"
+                / f"{row.tile_id}.tif"
+            )
+            if canonical.exists():
+                path = canonical
+                check.update(
+                    path=to_storage_path(path) or str(path),
+                    registered_path=to_storage_path(registered_path) or str(registered_path),
+                    status="recovered",
+                    error="Registered lossyear path points to treecover2000; using canonical lossyear tile",
+                )
+            else:
+                check.update(
+                    status="invalid",
+                    error="Registered lossyear path points to treecover2000 and canonical lossyear tile is missing",
+                )
+                checks.append(check)
+                continue
         if not path.exists():
             check.update(status="missing", error="Tile file does not exist")
             checks.append(check)
@@ -188,6 +231,13 @@ def _tile_proposals(
             out_shape=(out_height, out_width),
             resampling=Resampling.nearest,
         ).astype(np.uint8, copy=False)
+        invalid_codes = data[data > HANSEN_MAX_LOSS_CODE]
+        if invalid_codes.size:
+            raise ValueError(
+                "Hansen lossyear raster contains code "
+                f"{int(invalid_codes.max())}, but {HANSEN_VERSION} supports only "
+                f"0..{HANSEN_MAX_LOSS_CODE}"
+            )
         scan_transform = dataset.transform @ Affine.scale(
             dataset.width / out_width,
             dataset.height / out_height,
@@ -198,7 +248,11 @@ def _tile_proposals(
         proposals: list[dict[str, Any]] = []
         min_code = max(MIN_LOSS_CODE, options.min_event_year - 2000)
         structure = np.ones((3, 3), dtype=np.uint8)
-        for code in sorted(int(value) for value in np.unique(data) if int(value) >= min_code):
+        for code in sorted(
+            int(value)
+            for value in np.unique(data)
+            if min_code <= int(value) <= HANSEN_MAX_LOSS_CODE
+        ):
             binary = data == code
             labels, label_count = ndimage.label(binary, structure=structure)
             if label_count == 0:
@@ -292,7 +346,7 @@ def _aoi_histogram(
             area_per_pixel = pixel_area_ha(transform, dataset.crs, lat)
             for code, count in zip(*np.unique(layer, return_counts=True), strict=True):
                 year = 2000 + int(code)
-                if int(code) <= 0 or year < min_event_year:
+                if int(code) <= 0 or int(code) > HANSEN_MAX_LOSS_CODE or year < min_event_year:
                     continue
                 counts[year] += int(count)
                 areas[year] += float(count) * area_per_pixel
@@ -789,6 +843,182 @@ def candidate_run_payload(db: Session, run_id: str) -> dict[str, Any]:
         "items": items,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+    }
+
+
+def _candidate_lossyear_sources(
+    db: Session,
+    candidate: HansenCandidate,
+) -> list[tuple[str, Path]]:
+    tile_ids = [str(value) for value in _json_value(candidate.source_tile_ids_json, [])]
+    if not tile_ids:
+        tile_ids = sorted(_required_tile_ids(_json_value(candidate.aoi_bbox_json, [])))
+    rows = list(
+        db.scalars(
+            select(HansenTile)
+            .where(HansenTile.layer == "lossyear", HansenTile.tile_id.in_(tile_ids))
+            .order_by(HansenTile.tile_id, HansenTile.downloaded_at.desc(), HansenTile.id.desc())
+        )
+    )
+    rows_by_tile: dict[str, list[HansenTile]] = defaultdict(list)
+    for row in rows:
+        rows_by_tile[row.tile_id].append(row)
+
+    sources: list[tuple[str, Path]] = []
+    missing: list[str] = []
+    for tile_id in tile_ids:
+        candidates = sorted(
+            rows_by_tile.get(tile_id, []),
+            key=lambda row: row.version != candidate.hansen_dataset_version,
+        )
+        resolved = None
+        for row in candidates:
+            candidate_path = resolve_storage_path(row.local_path)
+            if (
+                "treecover2000" not in {part.casefold() for part in candidate_path.parts}
+                and candidate_path.exists()
+            ):
+                resolved = candidate_path
+                break
+        if resolved is None:
+            canonical = (
+                FOREST_HANSEN_CACHE_DIR
+                / candidate.hansen_dataset_version
+                / "lossyear"
+                / f"{tile_id}.tif"
+            )
+            if canonical.exists():
+                resolved = canonical
+        if resolved is None:
+            missing.append(tile_id)
+        else:
+            sources.append((tile_id, resolved))
+    if missing:
+        raise FileNotFoundError(
+            f"Hansen lossyear cache is missing candidate tile(s): {', '.join(missing)}"
+        )
+    if not sources:
+        raise FileNotFoundError("Hansen candidate has no lossyear source tiles.")
+    return sources
+
+
+def candidate_hansen_preview_payload(
+    db: Session,
+    candidate_id: str,
+) -> dict[str, Any]:
+    candidate = db.get(HansenCandidate, candidate_id)
+    if candidate is None:
+        raise ValueError(f"Hansen candidate not found: {candidate_id}")
+
+    source_rows = _candidate_lossyear_sources(db, candidate)
+    geometry_payload = sample_geometries(
+        candidate.lon,
+        candidate.lat,
+        viewer_aoi_m=candidate.aoi_size_m,
+    )
+    geometry = geometry_payload["viewer_aoi"]
+    requested_bbox = geometry_payload["viewer_aoi_bbox"]
+    metadata = _json_value(candidate.metadata_json, {})
+    min_event_year = int(metadata.get("min_event_year") or MIN_EVENT_YEAR)
+    fingerprint = {
+        "schema_version": CANDIDATE_PREVIEW_SCHEMA_VERSION,
+        "candidate_id": candidate.candidate_id,
+        "bbox": [round(float(value), 10) for value in requested_bbox],
+        "min_event_year": min_event_year,
+        "sources": [
+            {
+                "tile_id": tile_id,
+                "path": to_storage_path(path) or str(path),
+                "size": path.stat().st_size,
+                "mtime_ns": path.stat().st_mtime_ns,
+            }
+            for tile_id, path in source_rows
+        ],
+    }
+    preview_dir = (
+        FOREST_HANSEN_CACHE_DIR
+        / "candidate_previews"
+        / candidate.hansen_dataset_version
+        / candidate.candidate_id
+    )
+    png_path = preview_dir / "all_loss.png"
+    metadata_path = preview_dir / "all_loss.json"
+    preview_metadata: dict[str, Any] | None = None
+    cache_hit = False
+    if png_path.exists() and metadata_path.exists():
+        try:
+            cached = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if cached.get("fingerprint") == fingerprint:
+                preview_metadata = cached
+                cache_hit = True
+        except (OSError, ValueError, TypeError):
+            preview_metadata = None
+
+    if preview_metadata is None:
+        with ExitStack() as stack:
+            datasets = [stack.enter_context(rasterio.open(path)) for _tile_id, path in source_rows]
+            crs_values = {str(dataset.crs).upper() for dataset in datasets if dataset.crs}
+            if crs_values not in ({"EPSG:4326"}, {"OGC:CRS84"}):
+                raise ValueError(
+                    "Candidate Hansen preview expects all source tiles in EPSG:4326/CRS84."
+                )
+            mosaic, transform = rio_merge(
+                datasets,
+                bounds=tuple(float(value) for value in requested_bbox),
+                nodata=0,
+                dtype="uint8",
+                resampling=Resampling.nearest,
+            )
+        loss = mosaic[0].astype(np.uint8, copy=False)
+        inside = geometry_mask(
+            [geometry],
+            out_shape=loss.shape,
+            transform=transform,
+            invert=True,
+        )
+        loss = np.where(inside, loss, 0).astype(np.uint8, copy=False)
+        recent = (
+            (loss > 0)
+            & (loss <= HANSEN_MAX_LOSS_CODE)
+            & ((loss.astype(np.int16) + 2000) >= min_event_year)
+        )
+        loss = np.where(recent, loss, 0).astype(np.uint8, copy=False)
+        bbox = array_bounds(loss.shape[0], loss.shape[1], transform)
+
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        temporary_png = png_path.with_name(f".{png_path.stem}.{uuid.uuid4().hex}.tmp.png")
+        write_png(temporary_png, rgba_loss_year(loss))
+        temporary_png.replace(png_path)
+        preview_metadata = {
+            "fingerprint": fingerprint,
+            "bbox": [round(float(value), 10) for value in bbox],
+            "legend": loss_year_legend(loss),
+            "dimensions": [int(loss.shape[1]), int(loss.shape[0])],
+        }
+        temporary_metadata = metadata_path.with_name(
+            f".{metadata_path.stem}.{uuid.uuid4().hex}.tmp.json"
+        )
+        temporary_metadata.write_text(
+            json.dumps(preview_metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_metadata.replace(metadata_path)
+
+    png_url = cache_url(png_path)
+    if png_url is None:
+        raise RuntimeError(f"Candidate Hansen preview is outside the forest cache: {png_path}")
+    cache_version = max(source["mtime_ns"] for source in fingerprint["sources"])
+    return {
+        "preview_kind": "hansen_candidate_all_loss",
+        "candidate_id": candidate.candidate_id,
+        "primary_event_year": candidate.primary_event_year,
+        "event_years": _json_value(candidate.event_years_json, []),
+        "min_event_year": min_event_year,
+        "png_url": f"{png_url}?v={cache_version}",
+        "bbox": preview_metadata["bbox"],
+        "legend": preview_metadata["legend"],
+        "dimensions": preview_metadata["dimensions"],
+        "cache_hit": cache_hit,
     }
 
 

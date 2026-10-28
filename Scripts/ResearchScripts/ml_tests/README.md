@@ -34,3 +34,14 @@ For a headless baseline run:
 ```
 
 Embeddings are stored under the configured project-relative cache directory and are not embedded into the notebook or committed to Git.
+
+The notebook also contains an opt-in production artifact section. It first shows the best grouped-CV RemoteCLIP configuration and writes nothing. After review, set `SAVE_REMOTECLIP_ARTIFACT = True` to train the final scaler/classifier and save the versioned bundle under:
+
+```text
+Scripts/ResearchTool/Data/forest/models/remoteclip_logreg/<version>/
+  classifier.joblib
+  manifest.json
+  metrics.json
+```
+
+Existing versions are protected unless `OVERWRITE_REMOTECLIP_ARTIFACT = True` is set explicitly. The manifest includes the artifact hash, database fingerprint, training cohort, feature variant, class order, decision threshold, RemoteCLIP checkpoint hash, and a round-trip smoke-test result.

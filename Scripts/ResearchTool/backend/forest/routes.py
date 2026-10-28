@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from ..config import FOREST_EXPORTS_DIR, FOREST_IMPORTS_DIR, PROJECT_ROOT
 from .candidate_service import (
     CandidateMiningOptions,
+    candidate_hansen_preview_payload,
     candidate_run_payload,
     fill_candidate_run,
     list_candidate_runs,
@@ -1589,6 +1590,19 @@ def get_hansen_candidate_run(
         return candidate_run_payload(db, run_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/data-operations/hansen-mining/candidates/{candidate_id}/preview")
+def get_hansen_candidate_preview(
+    candidate_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return candidate_hansen_preview_payload(db, candidate_id)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/data-operations/hansen-mining/jobs")
