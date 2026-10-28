@@ -154,6 +154,195 @@ class SampleEvent(Base):
     )
 
 
+class HansenCandidateRun(Base):
+    __tablename__ = "forest_hansen_candidate_runs"
+
+    run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    algorithm_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    hansen_dataset_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    target_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    selected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_sample_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_json: Mapped[str | None] = mapped_column(Text)
+    artifact_path: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class HansenCandidate(Base):
+    __tablename__ = "forest_hansen_candidates"
+    __table_args__ = (
+        UniqueConstraint("created_sample_id", name="uq_forest_hansen_candidate_created_sample"),
+    )
+
+    candidate_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    hansen_dataset_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    lat: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    lon: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    aoi_size_m: Mapped[float] = mapped_column(Float, nullable=False)
+    aoi_bbox_json: Mapped[str] = mapped_column(Text, nullable=False)
+    primary_event_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    event_years_json: Mapped[str] = mapped_column(Text, nullable=False)
+    has_multiple_events: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    component_area_ha: Mapped[float] = mapped_column(Float, nullable=False)
+    dominant_loss_area_ha: Mapped[float] = mapped_column(Float, nullable=False)
+    dominant_loss_fraction: Mapped[float] = mapped_column(Float, nullable=False)
+    total_loss_area_ha: Mapped[float] = mapped_column(Float, nullable=False)
+    post_2016_loss_aoi_percent: Mapped[float] = mapped_column(Float, nullable=False)
+    dominant_event_aoi_percent: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    pixel_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_tile_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    component_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_sample_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_samples.sample_id"),
+        index=True,
+    )
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class HansenCandidateRunItem(Base):
+    __tablename__ = "forest_hansen_candidate_run_items"
+    __table_args__ = (
+        UniqueConstraint("run_id", "candidate_id", name="uq_forest_hansen_candidate_run_item"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_hansen_candidate_runs.run_id"),
+        nullable=False,
+        index=True,
+    )
+    candidate_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_hansen_candidates.candidate_id"),
+        nullable=False,
+        index=True,
+    )
+    decision: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String(64), index=True)
+    rejection_note: Mapped[str | None] = mapped_column(Text)
+    rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    candidate_score: Mapped[float | None] = mapped_column(Float)
+    nearest_sample_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_samples.sample_id"),
+        index=True,
+    )
+    nearest_sample_distance_m: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class HansenCandidateExclusion(Base):
+    __tablename__ = "forest_hansen_candidate_exclusions"
+
+    exclusion_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    candidate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_hansen_candidates.candidate_id"),
+        index=True,
+    )
+    aoi_bbox_json: Mapped[str] = mapped_column(Text, nullable=False)
+    aoi_geometry_json: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason_text: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    actor_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    excluded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LabelRun(Base):
+    __tablename__ = "forest_label_runs"
+
+    label_run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    producer_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    producer_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    producer_version: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    model_artifact_path: Mapped[str | None] = mapped_column(Text)
+    model_artifact_sha256: Mapped[str | None] = mapped_column(String(64))
+    feature_schema_version: Mapped[str | None] = mapped_column(String(128))
+    config_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EventLabel(Base):
+    __tablename__ = "forest_event_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id",
+            "source_name",
+            "source_version",
+            "input_fingerprint",
+            name="uq_forest_event_label_input",
+        ),
+    )
+
+    label_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    sample_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_samples.sample_id"),
+        nullable=False,
+        index=True,
+    )
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sample_events.event_id"),
+        nullable=False,
+        index=True,
+    )
+    label_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_label_runs.label_run_id"),
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_version: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    probabilities_json: Mapped[str | None] = mapped_column(Text)
+    based_on_label_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_event_labels.label_id"),
+        index=True,
+    )
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class EventReview(Base):
+    __tablename__ = "forest_event_reviews"
+
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sample_events.event_id"),
+        primary_key=True,
+    )
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    human_label_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_event_labels.label_id"),
+        index=True,
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(String(128))
+    notes: Mapped[str | None] = mapped_column(Text)
+    reviewer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class HansenTile(Base):
     __tablename__ = "forest_hansen_tiles"
     __table_args__ = (

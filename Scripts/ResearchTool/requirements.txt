@@ -6,6 +6,7 @@ numpy>=2.0
 shapely>=2.0
 pyproj>=3.7
 scikit-image>=0.25
+scipy>=1.14
 sqlalchemy>=2.0
 rasterio>=1.4
 pillow>=10.0

@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from .event_review_service import event_review_payload, sample_review_completion
 from .models import (
     HansenAnalysis,
     Sample,
@@ -228,6 +229,7 @@ def sample_events_payload(db: Session, sample_id: str) -> list[dict[str, Any]]:
     counts: dict[str, Counter[str]] = {event_id: Counter() for event_id in event_ids}
     for link in links:
         counts[link.event_id][link.period] += 1
+    completion = sample_review_completion(db, events)
     return [
         {
             "event_id": event.event_id,
@@ -240,6 +242,8 @@ def sample_events_payload(db: Session, sample_id: str) -> list[dict[str, Any]]:
             "metadata": json.loads(event.metadata_json) if event.metadata_json else None,
             "download_counts": dict(counts[event.event_id]),
             "download_count": sum(counts[event.event_id].values()),
+            "review": event_review_payload(db, event),
+            "review_completion": completion,
             "created_at": event.created_at.isoformat() if event.created_at else None,
             "updated_at": event.updated_at.isoformat() if event.updated_at else None,
         }

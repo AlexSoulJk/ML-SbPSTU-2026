@@ -26,6 +26,10 @@ export async function getForestSample(sampleId) {
   return api(`/api/forest/samples/${sampleId}`);
 }
 
+export async function getHansenTilePreview(sampleId) {
+  return api(`/api/forest/samples/${sampleId}/hansen/tile-preview`);
+}
+
 export async function saveManualValidation(sampleId, validation, notes) {
   return api(`/api/forest/samples/${sampleId}/manual-validation`, {
     method: "POST",
@@ -146,6 +150,51 @@ export async function startEventBackfill(limit = null) {
   return api("/api/forest/data-operations/events/backfill/jobs", {
     method: "POST",
     body: { limit },
+  });
+}
+
+export async function listHansenCandidateRuns(limit = 25) {
+  return api(`/api/forest/data-operations/hansen-mining/runs?limit=${encodeURIComponent(limit)}`);
+}
+
+export async function startHansenCandidateMining(payload) {
+  return api("/api/forest/data-operations/hansen-mining/jobs", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function rejectHansenCandidates(runId, payload) {
+  return api(`/api/forest/data-operations/hansen-mining/runs/${encodeURIComponent(runId)}/reject`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function fillHansenCandidateRun(runId) {
+  return api(`/api/forest/data-operations/hansen-mining/runs/${encodeURIComponent(runId)}/fill`, {
+    method: "POST",
+  });
+}
+
+export async function materializeHansenCandidates(runId, candidateIds) {
+  return api(`/api/forest/data-operations/hansen-mining/runs/${encodeURIComponent(runId)}/materialize`, {
+    method: "POST",
+    body: { candidate_ids: candidateIds },
+  });
+}
+
+export async function saveEventReview(eventId, payload) {
+  return api(`/api/forest/events/${encodeURIComponent(eventId)}/review`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export async function planModelLabeling(payload) {
+  return api("/api/forest/data-operations/model-labeling/plan", {
+    method: "POST",
+    body: payload,
   });
 }
 

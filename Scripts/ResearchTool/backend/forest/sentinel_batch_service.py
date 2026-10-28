@@ -65,7 +65,7 @@ class BatchOptions:
     search_top_n: int = DEFAULT_SEARCH_TOP_N
 
     def validate(self) -> None:
-        if self.mode not in {"empty_samples", "multi_event_enrichment"}:
+        if self.mode not in {"empty_samples", "multi_event_enrichment", "hansen_mining_run"}:
             raise ValueError(f"Unsupported Sentinel batch mode: {self.mode}")
         if not self.seasons:
             raise ValueError("At least one season must be selected.")

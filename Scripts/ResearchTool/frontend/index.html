@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=forest-event-fix-1" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=hansen-mining-1" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -238,10 +238,15 @@
                   <span>Hansen</span>
                 </label>
                 <label class="toggle">
+                  <input id="forestShowHansenTileToggle" type="checkbox" />
+                  <span>whole Hansen tile (all loss)</span>
+                </label>
+                <label class="toggle">
                   <input id="forestShowSentinelToggle" type="checkbox" checked />
                   <span>Sentinel</span>
                 </label>
               </div>
+              <div id="forestHansenTileStatus" class="meta">whole tile is off</div>
               <div id="forestSclLegend" class="forestRasterLegend" hidden></div>
               <label>
                 Hansen layer
@@ -340,12 +345,97 @@
             <button id="forestDataOperationsCloseBtn" type="button">Close</button>
           </header>
           <nav class="forestDataOperationsTabs" aria-label="Data operations">
-            <button type="button" data-data-operations-tab="download" class="active">Download Sentinel</button>
+            <button type="button" data-data-operations-tab="mine" class="active">Mine Hansen</button>
+            <button type="button" data-data-operations-tab="download">Download Sentinel</button>
+            <button type="button" data-data-operations-tab="labeling">Model labeling</button>
             <button type="button" data-data-operations-tab="export">Export Bundle</button>
             <button type="button" data-data-operations-tab="import">Import Bundle</button>
           </nav>
           <div class="forestDataOperationsPanels">
-            <section class="forestDataOperationsPanel" data-data-operations-panel="download">
+            <section class="forestDataOperationsPanel" data-data-operations-panel="mine">
+              <aside class="forestDataOperationsSetup">
+                <h3>Candidate mining</h3>
+                <label>
+                  Previous run
+                  <select id="forestDataOperationsMiningRun"><option value="">New plan</option></select>
+                </label>
+                <button id="forestDataOperationsMiningRefreshBtn" type="button">Refresh runs</button>
+                <div class="forestDataOperationsGrid2">
+                  <label>
+                    Target
+                    <input id="forestDataOperationsMiningTarget" type="number" min="1" max="1000" value="100" />
+                  </label>
+                  <label>
+                    AOI, m
+                    <input id="forestDataOperationsMiningAoi" type="number" min="200" max="10000" value="2000" />
+                  </label>
+                  <label>
+                    Safety gap, m
+                    <input id="forestDataOperationsMiningGap" type="number" min="0" max="5000" value="200" />
+                  </label>
+                  <label>
+                    Dominant loss, %
+                    <select id="forestDataOperationsMiningThreshold">
+                      <option value="0.5">0.5</option>
+                      <option value="1" selected>1</option>
+                      <option value="2.5">2.5</option>
+                      <option value="5">5</option>
+                      <option value="10">10</option>
+                    </select>
+                  </label>
+                  <label>
+                    Minimum year
+                    <input id="forestDataOperationsMiningYear" type="number" min="2016" max="2100" value="2016" />
+                  </label>
+                  <label>
+                    Discovery resolution, m
+                    <input id="forestDataOperationsMiningResolution" type="number" min="60" max="1000" value="300" />
+                  </label>
+                </div>
+                <section class="forestDataOperationsUtility">
+                  <strong>Manual exclusion</strong>
+                  <span>Checked candidates are excluded spatially from future runs. Use Fill to target to take replacements from the deterministic reserve.</span>
+                  <label>
+                    Annotator
+                    <input id="forestDataOperationsMiningActor" type="text" maxlength="255" placeholder="name" />
+                  </label>
+                  <label>
+                    Reason
+                    <select id="forestDataOperationsMiningRejectReason">
+                      <option value="URBAN_AREA">Urban area</option>
+                      <option value="BAD_LOCATION">Bad location</option>
+                      <option value="DUPLICATE_AREA">Duplicate area</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    Note
+                    <input id="forestDataOperationsMiningRejectNote" type="text" placeholder="optional" />
+                  </label>
+                </section>
+              </aside>
+              <section class="forestDataOperationsWork forestDataOperationsMiningWork">
+                <div id="forestDataOperationsMiningSummary" class="forestDataOperationsSummary"></div>
+                <div id="forestDataOperationsMiningMap" class="forestDataOperationsMiningMap" aria-label="Hansen candidate map"></div>
+                <div class="forestDataOperationsListHeader">
+                  <label><input id="forestDataOperationsMiningSelectAll" type="checkbox" checked /> Select all planned</label>
+                  <span id="forestDataOperationsMiningTotals" class="meta">Build a plan first.</span>
+                </div>
+                <div id="forestDataOperationsMiningRows" class="forestDataOperationsRows"></div>
+              </section>
+              <footer class="forestDataOperationsActionBar">
+                <div id="forestDataOperationsMiningJob" class="forestDataOperationsJob"></div>
+                <div class="forestDataOperationsButtonRow">
+                  <button id="forestDataOperationsMiningPlanBtn" type="button">Build plan</button>
+                  <button id="forestDataOperationsMiningRejectBtn" type="button" disabled>Reject checked</button>
+                  <button id="forestDataOperationsMiningFillBtn" type="button" disabled>Fill to target</button>
+                  <button id="forestDataOperationsMiningApplyBtn" class="primary" type="button" disabled>Create samples</button>
+                  <button id="forestDataOperationsMiningCancelBtn" type="button" disabled>Cancel</button>
+                </div>
+              </footer>
+            </section>
+
+            <section class="forestDataOperationsPanel" data-data-operations-panel="download" hidden>
               <aside class="forestDataOperationsSetup">
                 <h3>Setup</h3>
                 <label>
@@ -353,7 +443,12 @@
                   <select id="forestDataOperationsDownloadMode">
                     <option value="empty_samples">Empty samples</option>
                     <option value="multi_event_enrichment">Multi-event enrichment</option>
+                    <option value="hansen_mining_run">Hansen mining run</option>
                   </select>
+                </label>
+                <label>
+                  Mining run
+                  <select id="forestDataOperationsDownloadMiningRun"><option value="">Select a materialized run</option></select>
                 </label>
                 <label>
                   Manual validation
@@ -421,6 +516,33 @@
                   <button id="forestDataOperationsDownloadStartBtn" class="primary" type="button" disabled>Start</button>
                   <button id="forestDataOperationsDownloadCancelBtn" type="button" disabled>Cancel</button>
                 </div>
+              </footer>
+            </section>
+
+            <section class="forestDataOperationsPanel" data-data-operations-panel="labeling" hidden>
+              <aside class="forestDataOperationsSetup">
+                <h3>Model labeling</h3>
+                <section class="forestDataOperationsUtility">
+                  <strong>Inference is an explicit step</strong>
+                  <span>Predictions never create manual validation. This panel will use versioned RemoteCLIP + LogisticRegression and XGBoost artifacts.</span>
+                </section>
+                <label>
+                  Mining run
+                  <select id="forestDataOperationsLabelingRun"><option value="">Select a materialized run</option></select>
+                </label>
+                <div class="forestDataOperationsGrid2">
+                  <label>RemoteCLIP version<input id="forestDataOperationsRemoteclipVersion" type="text" value="v1" /></label>
+                  <label>XGBoost version<input id="forestDataOperationsXgboostVersion" type="text" value="v1" /></label>
+                </div>
+              </aside>
+              <section class="forestDataOperationsWork">
+                <div id="forestDataOperationsLabelingSummary" class="forestDataOperationsSummary"></div>
+                <div class="forestDataOperationsListHeader"><strong>Inference prerequisites</strong></div>
+                <div id="forestDataOperationsLabelingRows" class="forestDataOperationsRows"></div>
+              </section>
+              <footer class="forestDataOperationsActionBar">
+                <div class="forestDataOperationsJob">Predictions stay separate from human validation.</div>
+                <div class="forestDataOperationsButtonRow"><button id="forestDataOperationsLabelingPlanBtn" type="button">Build inference plan</button></div>
               </footer>
             </section>
 
@@ -643,6 +765,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=forest-bundle-import-audit-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=hansen-tile-colors-2"></script>
   </body>
 </html>

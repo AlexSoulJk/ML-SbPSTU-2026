@@ -15,6 +15,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import FOREST_EXPORTS_DIR, FOREST_IMPORTS_DIR, PROJECT_ROOT
+from .candidate_service import (
+    CandidateMiningOptions,
+    candidate_run_payload,
+    fill_candidate_run,
+    list_candidate_runs,
+    materialize_candidates,
+    mine_hansen_candidates,
+    reject_candidates,
+    restore_exclusion,
+)
 from .bundle_service import (
     bundle_candidates,
     bundle_plan,
@@ -32,19 +42,27 @@ from .db_sync_service import (
     candidate_databases,
 )
 from .geometry import DEFAULT_SAMPLE_PLOT_M, DEFAULT_VIEWER_AOI_M, haversine_m, sample_geometries
-from .hansen_service import analyze_sample_hansen, latest_hansen_payload
+from .hansen_service import (
+    analyze_sample_hansen,
+    hansen_tile_preview_payload,
+    latest_hansen_payload,
+)
 from .event_service import (
     backfill_hansen_events,
     sample_events_payload,
     upsert_event_download_link,
 )
+from .event_review_service import configured_annotator_name, save_event_review
 from .import_service import import_file
 from .jobs import jobs
+from .model_labeling_service import build_model_labeling_plan
 from .models import (
     ForestExport,
+    HansenCandidateRun,
     HansenAnalysis,
     ManualValidation,
     Sample,
+    SampleAssignment,
     SampleEvent,
     SampleStatus,
     SentinelDownload,
@@ -192,6 +210,7 @@ class SentinelBatchRequest(BaseModel):
     local_cloud_threshold: float = Field(default=0.10, ge=0.0, le=1.0)
     search_top_n: int = Field(default=40, ge=1, le=100)
     sample_ids: list[str] | None = None
+    mining_run_id: str | None = None
     selected_operation_keys: list[str] | None = None
 
 
@@ -219,6 +238,41 @@ class BundleImportRequest(BaseModel):
     bundle_path: str
     overwrite_existing: bool = False
     rebuild_previews: bool = True
+
+
+class HansenCandidateMiningRequest(BaseModel):
+    target_count: int = Field(default=100, ge=1, le=1000)
+    aoi_size_m: float = Field(default=2000.0, ge=200.0, le=10000.0)
+    safety_gap_m: float = Field(default=200.0, ge=0.0, le=5000.0)
+    min_dominant_event_aoi_percent: float = Field(default=1.0, gt=0.0, le=100.0)
+    min_event_year: int = Field(default=2016, ge=2016, le=2100)
+    scan_resolution_m: float = Field(default=300.0, ge=60.0, le=1000.0)
+
+
+class HansenCandidateSelectionRequest(BaseModel):
+    candidate_ids: list[str] = Field(default_factory=list)
+
+
+class HansenCandidateRejectRequest(BaseModel):
+    candidate_ids: list[str] = Field(default_factory=list)
+    reason_code: str = Field(default="MANUAL_EXCLUSION", min_length=1, max_length=64)
+    reason_text: str | None = None
+    actor_name: str | None = Field(default=None, max_length=255)
+
+
+class EventReviewRequest(BaseModel):
+    review_status: str
+    label: str | None = None
+    based_on_label_id: str | None = None
+    rejection_reason: str | None = None
+    notes: str | None = None
+    actor_name: str | None = Field(default=None, max_length=255)
+
+
+class ModelLabelingPlanRequest(BaseModel):
+    mining_run_id: str
+    remoteclip_version: str = Field(default="v1", max_length=128)
+    xgboost_version: str = Field(default="v1", max_length=128)
 
 
 def json_or_none(value: str | None) -> Any:
@@ -629,8 +683,29 @@ def batch_options_from_request(request: SentinelBatchRequest) -> BatchOptions:
 
 
 def selected_batch_samples(db: Session, request: SentinelBatchRequest) -> list[Sample]:
-    samples = read_filtered_samples(db, request.filters)
-    if request.drivers:
+    if request.mode == "hansen_mining_run":
+        if not request.mining_run_id:
+            raise ValueError("mining_run_id is required for hansen_mining_run mode")
+        assigned_ids = list(
+            db.scalars(
+                select(SampleAssignment.sample_id)
+                .where(
+                    SampleAssignment.assignment_type == "hansen_mining_run",
+                    SampleAssignment.assignment_name == request.mining_run_id,
+                )
+                .order_by(SampleAssignment.sample_id)
+            )
+        )
+        samples = list(
+            db.scalars(
+                select(Sample)
+                .where(Sample.sample_id.in_(assigned_ids))
+                .order_by(Sample.source_file, Sample.source_id, Sample.sample_id)
+            )
+        ) if assigned_ids else []
+    else:
+        samples = read_filtered_samples(db, request.filters)
+    if request.drivers and request.mode != "hansen_mining_run":
         drivers = set(request.drivers)
         samples = [
             sample
@@ -641,6 +716,74 @@ def selected_batch_samples(db: Session, request: SentinelBatchRequest) -> list[S
         selected_ids = set(request.sample_ids)
         samples = [sample for sample in samples if sample.sample_id in selected_ids]
     return samples[: request.limit_samples]
+
+
+def run_hansen_candidate_mining_job(
+    job_id: str,
+    request: HansenCandidateMiningRequest,
+) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        jobs.update(
+            job_id,
+            status="running",
+            stage="inventory",
+            message="Checking local Hansen lossyear tiles",
+        )
+        result = mine_hansen_candidates(
+            db,
+            CandidateMiningOptions(
+                target_count=request.target_count,
+                aoi_size_m=request.aoi_size_m,
+                safety_gap_m=request.safety_gap_m,
+                min_dominant_event_aoi_percent=request.min_dominant_event_aoi_percent,
+                min_event_year=request.min_event_year,
+                scan_resolution_m=request.scan_resolution_m,
+            ),
+            run_id=job_id,
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        jobs.update(
+            job_id,
+            status="completed",
+            stage="done",
+            done=result["summary"].get("valid_tiles", 0),
+            total=result["summary"].get("valid_tiles", 0),
+            message=(
+                f"Mining plan ready: {result['selected_count']}/{result['target_count']} selected, "
+                f"{result['summary'].get('reserve_count', 0)} reserve"
+            ),
+            result=result,
+        )
+    except Exception as exc:
+        db.rollback()
+        cancelled = job_cancel_requested(job_id) or "cancelled" in str(exc).lower()
+        run = db.get(HansenCandidateRun, job_id)
+        if run is not None:
+            run.status = "CANCELLED" if cancelled else "FAILED"
+            run.summary_json = json.dumps({"error": str(exc)[:500]}, ensure_ascii=False)
+            run.updated_at = utc_now()
+            db.commit()
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "failed",
+            stage="cancelled" if cancelled else "failed",
+            message=str(exc)[:500],
+        )
+    finally:
+        db.close()
 
 
 def run_event_backfill_job(job_id: str, limit: int | None) -> None:
@@ -990,6 +1133,22 @@ def get_sample(sample_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return sample_detail(sample, db)
 
 
+@router.get("/samples/{sample_id}/hansen/tile-preview")
+def get_hansen_tile_preview(
+    sample_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    sample = db.get(Sample, sample_id)
+    if sample is None:
+        raise HTTPException(status_code=404, detail="Sample was not found.")
+    try:
+        return hansen_tile_preview_payload(db, sample)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/samples/{sample_id}/display-name")
 def save_sample_display_name(
     sample_id: str,
@@ -1077,6 +1236,30 @@ def save_manual_validation(
     db.commit()
     db.refresh(sample)
     return sample_detail(sample, db)
+
+
+@router.put("/events/{event_id}/review")
+def save_sample_event_review(
+    event_id: str,
+    request: EventReviewRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return save_event_review(
+            db,
+            event_id,
+            review_status=request.review_status,
+            actor_name=request.actor_name,
+            label=request.label,
+            based_on_label_id=request.based_on_label_id,
+            rejection_reason=request.rejection_reason,
+            notes=request.notes,
+        )
+    except ValueError as exc:
+        db.rollback()
+        message = str(exc)
+        status_code = 404 if message.startswith("Event not found") else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 def export_row(sample: Sample) -> dict[str, Any]:
@@ -1382,6 +1565,124 @@ def resolve_bundle_download_ids(
     if request.limit is not None:
         ids = ids[: request.limit]
     return ids, source_details
+
+
+@router.get("/context")
+def forest_context() -> dict[str, Any]:
+    return {"annotator_name": configured_annotator_name()}
+
+
+@router.get("/data-operations/hansen-mining/runs")
+def get_hansen_candidate_runs(
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return {"items": list_candidate_runs(db, limit=limit)}
+
+
+@router.get("/data-operations/hansen-mining/runs/{run_id}")
+def get_hansen_candidate_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return candidate_run_payload(db, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/hansen-mining/jobs")
+def start_hansen_candidate_mining_job(
+    request: HansenCandidateMiningRequest,
+) -> dict[str, Any]:
+    job = jobs.create(
+        "hansen_candidate_mining",
+        message=f"Queued Hansen mining for up to {request.target_count} candidate(s)",
+    )
+    thread = threading.Thread(
+        target=run_hansen_candidate_mining_job,
+        args=(job.job_id, request),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
+
+
+@router.post("/data-operations/hansen-mining/runs/{run_id}/reject")
+def reject_hansen_candidate_rows(
+    run_id: str,
+    request: HansenCandidateRejectRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not request.candidate_ids:
+        raise HTTPException(status_code=400, detail="Select at least one candidate to reject.")
+    try:
+        return reject_candidates(
+            db,
+            run_id,
+            request.candidate_ids,
+            reason_code=request.reason_code,
+            reason_text=request.reason_text,
+            actor_name=request.actor_name,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/hansen-mining/runs/{run_id}/fill")
+def fill_hansen_candidate_rows(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return fill_candidate_run(db, run_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/hansen-mining/runs/{run_id}/materialize")
+def materialize_hansen_candidate_rows(
+    run_id: str,
+    request: HansenCandidateSelectionRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not request.candidate_ids:
+        raise HTTPException(status_code=400, detail="Select at least one candidate to materialize.")
+    try:
+        return materialize_candidates(db, run_id, request.candidate_ids)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/hansen-mining/exclusions/{exclusion_id}/restore")
+def restore_hansen_candidate_exclusion(
+    exclusion_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return restore_exclusion(db, exclusion_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/model-labeling/plan")
+def model_labeling_plan(
+    request: ModelLabelingPlanRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return build_model_labeling_plan(
+            db,
+            mining_run_id=request.mining_run_id,
+            remoteclip_version=request.remoteclip_version,
+            xgboost_version=request.xgboost_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/data-operations/events/backfill/plan")

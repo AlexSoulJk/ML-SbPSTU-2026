@@ -59,6 +59,9 @@ def ensure_directories() -> None:
         FOREST_SENTINEL_METADATA_CACHE_DIR,
         FOREST_SENTINEL_RASTER_CACHE_DIR,
         FOREST_DERIVED_CACHE_DIR,
+        FOREST_FEATURES_DIR,
+        FOREST_MODELS_DIR,
+        FOREST_CHANGE_CACHE_DIR,
     ):
         path.mkdir(parents=True, exist_ok=True)
 

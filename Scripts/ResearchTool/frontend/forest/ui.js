@@ -1,5 +1,6 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=forest-event-fix-1";
-import { initDataOperations } from "./data_operations.js?v=forest-bundle-import-audit-1";
+import { clearForestLayers, renderForestMap } from "./map.js?v=hansen-tile-colors-2";
+import { initDataOperations } from "./data_operations.js?v=hansen-whole-tile-1";
+import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
   applyDbSync,
@@ -9,17 +10,19 @@ import {
   exportForestSamples,
   getForestSample,
   getForestJob,
+  getHansenTilePreview,
   importForestFiles,
   listForestSamples,
   listDbSyncCandidates,
   saveManualValidation,
+  saveEventReview,
   saveSampleDisplayName,
   saveSentinelReview,
   searchSentinel,
   startHansenBatch,
   startSentinelCacheDownload,
-} from "./samples.js?v=forest-bundle-source-1";
-import { forestState } from "./state.js?v=forest-event-fix-1";
+} from "./samples.js?v=hansen-whole-tile-1";
+import { forestState } from "./state.js?v=hansen-whole-tile-1";
 
 function $(id) {
   return document.getElementById(id);
@@ -217,10 +220,6 @@ function mergeLegendItems(groups, keyField) {
   return [...byKey.values()].sort((left, right) => Number(left[keyField]) - Number(right[keyField]));
 }
 
-function visibleLegendItems(legend, hiddenKeys, keyField) {
-  return legend.filter((item) => !hiddenKeys.has(String(item[keyField])));
-}
-
 async function filteredRasterUrl(sourceUrl, legend, hiddenKeys, keyField) {
   if (!sourceUrl || !legend?.length) return sourceUrl;
   const activeHidden = legend
@@ -229,7 +228,9 @@ async function filteredRasterUrl(sourceUrl, legend, hiddenKeys, keyField) {
     .sort();
   if (!activeHidden.length) return sourceUrl;
 
-  const visibleColors = new Set(visibleLegendItems(legend, hiddenKeys, keyField).map((item) => colorKey(item.color)));
+  const hidden = new Set(activeHidden);
+  const classifyColor = createPaletteClassifier(legend, keyField);
+  const classificationCache = new Map();
   const cacheKey = `${sourceUrl}::${keyField}::${activeHidden.join(",")}`;
   if (forestState.rasterFilterCache.has(cacheKey)) {
     return forestState.rasterFilterCache.get(cacheKey);
@@ -241,7 +242,14 @@ async function filteredRasterUrl(sourceUrl, legend, hiddenKeys, keyField) {
   const data = imageData.data;
   for (let index = 0; index < data.length; index += 4) {
     if (data[index + 3] === 0) continue;
-    if (!visibleColors.has(rgbKey(data[index], data[index + 1], data[index + 2]))) {
+    const pixelColor = rgbKey(data[index], data[index + 1], data[index + 2]);
+    if (!classificationCache.has(pixelColor)) {
+      classificationCache.set(
+        pixelColor,
+        classifyColor(data[index], data[index + 1], data[index + 2]),
+      );
+    }
+    if (hidden.has(classificationCache.get(pixelColor))) {
       data[index + 3] = 0;
     }
   }
@@ -269,13 +277,54 @@ function currentHansenOverlay(detail = forestState.selectedDetail) {
   );
 }
 
+function currentHansenLegendOverlay(hostId, detail) {
+  if (
+    hostId === "forestHansenLegend"
+    && forestState.visibility.hansenTile
+    && forestState.hansenTilePreviewSampleId === detail?.sample_id
+    && forestState.hansenTilePreview
+  ) {
+    return forestState.hansenTilePreview;
+  }
+  return currentHansenOverlay(detail);
+}
+
+function renderHansenTileStatus() {
+  const host = $("forestHansenTileStatus");
+  if (!host) return;
+  if (!forestState.visibility.hansenTile) {
+    host.textContent = "whole tile is off";
+    return;
+  }
+  if (!forestState.selectedSampleId) {
+    host.textContent = "select a sample to load its tile";
+    return;
+  }
+  if (forestState.hansenTilePreviewLoading) {
+    host.textContent = "preparing whole-tile preview...";
+    return;
+  }
+  if (forestState.hansenTilePreviewError) {
+    host.textContent = forestState.hansenTilePreviewError;
+    return;
+  }
+  const preview = forestState.hansenTilePreview;
+  if (preview && forestState.hansenTilePreviewSampleId === forestState.selectedSampleId) {
+    const dimensions = preview.preview_dimensions?.join("×") || "preview";
+    host.textContent = `${preview.tile_id} · ${preview.version} · ${dimensions}`;
+    return;
+  }
+  host.textContent = "whole tile is not loaded";
+}
+
 function renderHansenLegend(hostId = "forestHansenLegend", detail = forestState.selectedDetail) {
   const host = $(hostId);
   if (!host) return;
 
-  const overlay = currentHansenOverlay(detail);
+  const overlay = currentHansenLegendOverlay(hostId, detail);
   const legend = overlay?.legend || [];
-  if (forestState.hansenLayer !== "all_loss") {
+  const isWholeTile = overlay?.preview_kind === "hansen_tile_lossyear";
+  if (!isWholeTile && forestState.hansenLayer !== "all_loss") {
     host.hidden = false;
     host.innerHTML = `<div class="meta">Legend is shown for all loss.</div>`;
     return;
@@ -288,7 +337,7 @@ function renderHansenLegend(hostId = "forestHansenLegend", detail = forestState.
 
   host.hidden = false;
   host.innerHTML = `
-    <div class="forestHansenLegendTitle">Loss year</div>
+    <div class="forestHansenLegendTitle">${isWholeTile ? `Tile ${escapeHtml(overlay.tile_id)} loss year` : "Loss year"}</div>
     <div class="forestHansenLegendItems">
       ${legend
         .map((item) => {
@@ -422,6 +471,7 @@ function renderLayerPanelState() {
   closeButton.hidden = forestState.layerPanelCollapsed;
   openButton.setAttribute("aria-expanded", "false");
   closeButton.setAttribute("aria-expanded", "true");
+  renderHansenTileStatus();
   renderRasterLegends();
 }
 
@@ -1155,6 +1205,12 @@ function isFilterableHansenOverlay(overlay) {
     && (overlay.legend || []).length;
 }
 
+function isFilterableHansenTileOverlay(overlay) {
+  return overlay?.preview_kind === "hansen_tile_lossyear"
+    && overlay?.png_url
+    && (overlay.legend || []).length;
+}
+
 async function filteredHansenOverlayUrl(overlay) {
   if (!isFilterableHansenOverlay(overlay)) return overlay?.png_url || null;
   return filteredRasterUrl(overlay.png_url, overlay.legend || [], forestState.hansenLossHiddenYears, "year");
@@ -1184,6 +1240,23 @@ function applyMainRasterFilters() {
     const layerRef = hansenLayer;
     filteredHansenOverlayUrl(overlay).then((url) => {
       if (url && forestState.layers.hansen === layerRef) {
+        layerRef.setUrl(url);
+      }
+    });
+  }
+
+
+  const hansenTileLayer = forestState.layers.hansenTile;
+  const tileOverlay = forestState.hansenTilePreview;
+  if (hansenTileLayer && isFilterableHansenTileOverlay(tileOverlay)) {
+    const layerRef = hansenTileLayer;
+    filteredRasterUrl(
+      tileOverlay.png_url,
+      tileOverlay.legend || [],
+      forestState.hansenLossHiddenYears,
+      "year",
+    ).then((url) => {
+      if (url && forestState.layers.hansenTile === layerRef) {
         layerRef.setUrl(url);
       }
     });
@@ -2051,7 +2124,8 @@ function renderSampleEvents(sample) {
           trailing: `${downloads.length} Sentinel downloads`,
         })}
         ${events.map((event) => {
-          const detail = `${event.source || "unknown"}${event.is_dominant ? " / dominant by area" : ""}`;
+          const reviewStatus = event.review?.review_status || "DRAFT";
+          const detail = `${event.source || "unknown"}${event.is_dominant ? " / dominant by area" : ""} / ${reviewStatus}`;
           return renderEventFilterRow({
             value: event.event_id,
             title: String(event.event_year),
@@ -2066,7 +2140,57 @@ function renderSampleEvents(sample) {
           trailing: `${unassigned.length} Sentinel downloads`,
         }) : ""}
       </div>
+      ${renderEventReviewPanel(sample)}
     </article>
+  `;
+}
+
+function renderEventReviewPanel(sample) {
+  const event = (sample.events || []).find(
+    (row) => row.event_id === forestState.selectedSampleEventId,
+  );
+  if (!event) {
+    return `<div id="forestEventReviewPanel" class="forestEventReviewPanel meta">Select one event to review it or inspect model predictions.</div>`;
+  }
+  const review = event.review || {};
+  const modelLabels = (review.labels || []).filter((row) => row.source_type === "MODEL");
+  const actor = window.localStorage.getItem("forestAnnotatorName") || "";
+  return `
+    <section id="forestEventReviewPanel" class="forestEventReviewPanel">
+      <div class="forestPanelHeader">
+        <h4>Event review · ${escapeHtml(event.event_year)}</h4>
+        <span class="forestDataOperationsBadge">${escapeHtml(review.review_status || "DRAFT")}</span>
+      </div>
+      <div class="forestEventPredictions">
+        ${modelLabels.length ? modelLabels.map((label) => `
+          <span><strong>${escapeHtml(label.source_name)}</strong> ${escapeHtml(label.label)} · ${label.confidence === null || label.confidence === undefined ? "n/a" : Number(label.confidence).toFixed(3)} · ${escapeHtml(label.source_version)}</span>
+        `).join("") : `<span class="meta">No model predictions yet.</span>`}
+        <span><strong>Agreement</strong> ${escapeHtml(review.model_agreement || "INCOMPLETE")}</span>
+      </div>
+      <div class="forestEventReviewControls">
+        <label>Status
+          <select id="forestEventReviewStatus">
+            ${["DRAFT", "VALID", "UNCLEAR", "REJECTED"].map((status) => `<option value="${status}" ${status === (review.review_status || "DRAFT") ? "selected" : ""}>${status}</option>`).join("")}
+          </select>
+        </label>
+        <label>Human label
+          <select id="forestEventReviewLabel">
+            ${["Logging", "Wildfire", "Other"].map((label) => `<option value="${label}" ${label === review.human_label ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>Reject reason
+          <input id="forestEventReviewReason" type="text" value="${escapeHtml(review.rejection_reason || "")}" placeholder="required for REJECTED" />
+        </label>
+        <label>Reviewer
+          <input id="forestEventReviewActor" type="text" value="${escapeHtml(actor)}" placeholder="name" />
+        </label>
+        <label class="forestEventReviewNotes">Notes
+          <input id="forestEventReviewNotes" type="text" value="${escapeHtml(review.notes || "")}" placeholder="optional" />
+        </label>
+        <button id="forestEventReviewSaveBtn" class="primary" type="button">Save event review</button>
+      </div>
+      ${review.is_inherited ? `<span class="meta">Current state is inherited from the legacy sample label and is not duplicated in event tables yet.</span>` : ""}
+    </section>
   `;
 }
 
@@ -2132,6 +2256,7 @@ function selectSampleEventFilter(sample, eventId, options = {}) {
     }
   }
 
+  renderDetail();
   ensureActiveSentinelPreviewForSample(sample);
   renderSentinelDownloadsPanel();
   const compareButton = $("forestCompareSentinelBtn");
@@ -2242,6 +2367,7 @@ function renderDetail() {
       if (input.checked) selectSampleEventFilter(sample, input.value);
     });
   });
+  $("forestEventReviewSaveBtn")?.addEventListener("click", () => run(saveCurrentEventReview));
   $("forestHansenTreecoverInput").addEventListener("change", (event) => {
     forestState.includeHansenTreecover = event.target.checked;
   });
@@ -2380,6 +2506,77 @@ function renderMap(fit = false) {
   applyVisibleRasterFilters();
 }
 
+function resetHansenTilePreview() {
+  forestState.hansenTilePreviewRequestId += 1;
+  forestState.hansenTilePreview = null;
+  forestState.hansenTilePreviewSampleId = null;
+  forestState.hansenTilePreviewLoading = false;
+  forestState.hansenTilePreviewError = null;
+}
+
+function fitMapToHansenTile(preview) {
+  const bbox = preview?.bbox;
+  const map = window.pipelineExplorer?.state?.map;
+  if (!map || !Array.isArray(bbox) || bbox.length !== 4) return;
+  map.fitBounds(
+    [
+      [bbox[1], bbox[0]],
+      [bbox[3], bbox[2]],
+    ],
+    { padding: [24, 24] },
+  );
+}
+
+async function loadSelectedHansenTilePreview({ fit = false } = {}) {
+  const sampleId = forestState.selectedSampleId;
+  if (!sampleId) {
+    renderLayerPanelState();
+    return;
+  }
+  if (
+    forestState.hansenTilePreview
+    && forestState.hansenTilePreviewSampleId === sampleId
+  ) {
+    renderMap();
+    if (fit) fitMapToHansenTile(forestState.hansenTilePreview);
+    return;
+  }
+
+  const requestId = forestState.hansenTilePreviewRequestId + 1;
+  forestState.hansenTilePreviewRequestId = requestId;
+  forestState.hansenTilePreviewLoading = true;
+  forestState.hansenTilePreviewError = null;
+  renderLayerPanelState();
+  setForestStatus("preparing whole Hansen tile preview");
+
+  try {
+    const preview = await getHansenTilePreview(sampleId);
+    if (
+      requestId !== forestState.hansenTilePreviewRequestId
+      || sampleId !== forestState.selectedSampleId
+      || !forestState.visibility.hansenTile
+    ) return;
+    forestState.hansenTilePreview = preview;
+    forestState.hansenTilePreviewSampleId = sampleId;
+    forestState.hansenTilePreviewError = null;
+    renderMap();
+    if (fit) fitMapToHansenTile(preview);
+    setForestStatus(`whole Hansen tile ready: ${preview.tile_id}`);
+  } catch (error) {
+    if (requestId !== forestState.hansenTilePreviewRequestId) return;
+    forestState.hansenTilePreview = null;
+    forestState.hansenTilePreviewSampleId = sampleId;
+    forestState.hansenTilePreviewError = error.message || String(error);
+    renderMap();
+    throw error;
+  } finally {
+    if (requestId === forestState.hansenTilePreviewRequestId) {
+      forestState.hansenTilePreviewLoading = false;
+      renderLayerPanelState();
+    }
+  }
+}
+
 function clearSelectedSample() {
   closeCompareView({ silent: true });
   forestState.selectedSampleId = null;
@@ -2388,6 +2585,7 @@ function clearSelectedSample() {
   forestState.sentinelImageIdQuery = "";
   forestState.selectedSampleEventId = "all";
   forestState.nearest = [];
+  resetHansenTilePreview();
 }
 
 async function refreshSamples(options = {}) {
@@ -2435,6 +2633,7 @@ async function selectSample(sampleId, options = {}) {
     forestState.selectedSampleEventId = "all";
     forestState.comparePreDownloadId = null;
     forestState.comparePostDownloadId = null;
+    resetHansenTilePreview();
   }
   forestState.selectedSampleId = sampleId;
   forestState.selectedDetail = await getForestSample(sampleId);
@@ -2451,6 +2650,9 @@ async function selectSample(sampleId, options = {}) {
     active_preview_bbox: Boolean(forestState.activeSentinelPreview?.bbox),
   });
   setForestStatus("sample selected");
+  if (forestState.visibility.hansenTile) {
+    run(() => loadSelectedHansenTilePreview());
+  }
 }
 
 async function refreshForestData() {
@@ -2788,6 +2990,29 @@ async function saveValidation() {
   setForestStatus(`validation saved: ${validation}`);
 }
 
+async function saveCurrentEventReview() {
+  const sample = forestState.selectedDetail;
+  const event = (sample?.events || []).find(
+    (row) => row.event_id === forestState.selectedSampleEventId,
+  );
+  if (!sample || !event) throw new Error("Select one event before saving an event review.");
+  const reviewStatus = $("forestEventReviewStatus").value;
+  const actorName = $("forestEventReviewActor").value.trim();
+  if (!actorName) throw new Error("Enter a reviewer name.");
+  window.localStorage.setItem("forestAnnotatorName", actorName);
+  await saveEventReview(event.event_id, {
+    review_status: reviewStatus,
+    label: reviewStatus === "VALID" ? $("forestEventReviewLabel").value : null,
+    rejection_reason: reviewStatus === "REJECTED" ? $("forestEventReviewReason").value.trim() : null,
+    notes: $("forestEventReviewNotes").value.trim() || null,
+    actor_name: actorName,
+  });
+  forestState.selectedDetail = await getForestSample(sample.sample_id);
+  renderDetail();
+  await refreshSamples();
+  setForestStatus(`event ${event.event_year} review saved: ${reviewStatus}`);
+}
+
 async function saveSampleName() {
   if (!forestState.selectedSampleId) return;
   const displayName = $("forestSampleNameInput").value;
@@ -2915,6 +3140,21 @@ function bindEvents() {
       renderMap();
     });
   });
+  $("forestShowHansenTileToggle").addEventListener("change", (event) => {
+    forestState.visibility.hansenTile = event.target.checked;
+    if (!event.target.checked) {
+      forestState.hansenTilePreviewRequestId += 1;
+      forestState.hansenTilePreviewLoading = false;
+      forestState.hansenTilePreviewError = null;
+      renderLayerPanelState();
+      renderMap();
+      setForestStatus("whole Hansen tile hidden");
+      return;
+    }
+    renderLayerPanelState();
+    renderMap();
+    run(() => loadSelectedHansenTilePreview({ fit: true }));
+  });
   $("forestHansenLayerSelect").addEventListener("change", (event) => {
     forestState.hansenLayer = event.target.value;
     renderMap();
@@ -2922,9 +3162,14 @@ function bindEvents() {
   });
   $("forestHansenOpacityInput").addEventListener("input", (event) => {
     forestState.hansenOpacity = Number(event.target.value) / 100;
-    if (forestState.layers.hansen?.setOpacity) {
-      forestState.layers.hansen.setOpacity(forestState.hansenOpacity);
-    } else {
+    let applied = false;
+    [forestState.layers.hansen, forestState.layers.hansenTile].forEach((layer) => {
+      if (layer?.setOpacity) {
+        layer.setOpacity(forestState.hansenOpacity);
+        applied = true;
+      }
+    });
+    if (!applied) {
       renderMap();
     }
   });
@@ -2936,6 +3181,7 @@ function bindEvents() {
   $("forestHansenLayerSelect").value = forestState.hansenLayer;
   $("forestHansenOpacityInput").value = String(Math.round(forestState.hansenOpacity * 100));
   $("forestHansenPixelatedToggle").checked = forestState.hansenPixelated;
+  $("forestShowHansenTileToggle").checked = forestState.visibility.hansenTile;
   renderLayerPanelState();
   initDataOperations({
     currentFilters,

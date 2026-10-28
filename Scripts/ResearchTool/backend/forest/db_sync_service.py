@@ -9,12 +9,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from ..config import FOREST_DATA_DIR, FOREST_HANSEN_CACHE_DIR, FOREST_STATE_DB_PATH, PROJECT_ROOT, TOOL_ROOT
 from .models import (
     DerivedPreview,
+    EventLabel,
+    EventReview,
+    HansenCandidate,
+    HansenCandidateExclusion,
+    HansenCandidateRun,
+    HansenCandidateRunItem,
+    LabelRun,
     ManualValidation,
     Sample,
     SampleStatus,
@@ -41,7 +48,59 @@ REQUIRED_TABLES = {
     "forest_hansen_analyses",
     "forest_hansen_tiles",
     "forest_hansen_masks",
+    "forest_hansen_candidate_runs",
+    "forest_hansen_candidates",
+    "forest_hansen_candidate_run_items",
+    "forest_hansen_candidate_exclusions",
+    "forest_label_runs",
+    "forest_event_labels",
+    "forest_event_reviews",
 }
+
+PORTABLE_TABLE_SPECS = (
+    (
+        "hansen_candidate_runs",
+        "forest_hansen_candidate_runs",
+        HansenCandidateRun,
+        ("run_id",),
+    ),
+    (
+        "hansen_candidates",
+        "forest_hansen_candidates",
+        HansenCandidate,
+        ("candidate_id",),
+    ),
+    (
+        "hansen_candidate_run_items",
+        "forest_hansen_candidate_run_items",
+        HansenCandidateRunItem,
+        ("id",),
+    ),
+    (
+        "hansen_candidate_exclusions",
+        "forest_hansen_candidate_exclusions",
+        HansenCandidateExclusion,
+        ("exclusion_id",),
+    ),
+    (
+        "label_runs",
+        "forest_label_runs",
+        LabelRun,
+        ("label_run_id",),
+    ),
+    (
+        "event_labels",
+        "forest_event_labels",
+        EventLabel,
+        ("label_id",),
+    ),
+    (
+        "event_reviews",
+        "forest_event_reviews",
+        EventReview,
+        ("event_id",),
+    ),
+)
 
 DOWNLOAD_COLUMNS = [
     "download_id",
@@ -384,6 +443,139 @@ def op(
 
 def add_summary(summary: dict[str, Counter], entity: str, status: str) -> None:
     summary[entity][status] += 1
+
+
+PORTABLE_AUDIT_COLUMNS = {
+    "created_at",
+    "updated_at",
+    "finished_at",
+    "excluded_at",
+    "restored_at",
+}
+PORTABLE_PATH_COLUMNS = {"artifact_path", "model_artifact_path"}
+
+
+def portable_row_key(row: dict[str, Any], key_columns: tuple[str, ...]) -> str:
+    return "|".join(str(row.get(column) or "") for column in key_columns)
+
+
+def portable_local_rows(
+    db: Session,
+    model: Any,
+    key_columns: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    columns = [column.name for column in model.__table__.columns]
+    result: dict[str, dict[str, Any]] = {}
+    for record in db.scalars(select(model)):
+        row: dict[str, Any] = {}
+        for column in columns:
+            value = getattr(record, column)
+            row[column] = value.isoformat() if isinstance(value, datetime) else value
+        result[portable_row_key(row, key_columns)] = row
+    return result
+
+
+def portable_incoming_rows(
+    connection: sqlite3.Connection,
+    table: str,
+    model: Any,
+    key_columns: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    columns = [column.name for column in model.__table__.columns]
+    result = {}
+    for row in read_rows(connection, table, columns):
+        key = portable_row_key(row, key_columns)
+        if key and all(row.get(column) is not None for column in key_columns):
+            result[key] = row
+    return result
+
+
+def portable_values_equal(column: str, left: Any, right: Any) -> bool:
+    if column.endswith("_json"):
+        return normalized_json_value(left) == normalized_json_value(right)
+    if column.startswith("is_") or column.startswith("has_"):
+        return bool_value(left) == bool_value(right)
+    if isinstance(left, (float, int)) or isinstance(right, (float, int)):
+        return numeric_values_equal(left, right)
+    return values_equal(left, right)
+
+
+def compare_portable_tables(
+    db: Session,
+    connection: sqlite3.Connection,
+    *,
+    summary: dict[str, Counter],
+    operations: list[dict[str, Any]],
+) -> None:
+    for entity, table, model, key_columns in PORTABLE_TABLE_SPECS:
+        if not table_exists(connection, table):
+            continue
+        local = portable_local_rows(db, model, key_columns)
+        incoming = portable_incoming_rows(connection, table, model, key_columns)
+        for key in sorted(set(local) | set(incoming)):
+            left = local.get(key)
+            right = incoming.get(key)
+            if left is None and right is not None:
+                nonportable = [
+                    column
+                    for column in PORTABLE_PATH_COLUMNS
+                    if right.get(column) and not is_portable_storage_path(right[column])
+                ]
+                if nonportable:
+                    add_summary(summary, entity, "nonportable_path")
+                    operations.append(
+                        op(
+                            entity=entity,
+                            key=key,
+                            action="portable_row_nonportable_path",
+                            status="report-only",
+                            message=f"Incoming row has non-portable path fields: {', '.join(nonportable)}.",
+                            incoming_value=right,
+                        )
+                    )
+                    continue
+                add_summary(summary, entity, "only_incoming")
+                operations.append(
+                    op(
+                        entity=entity,
+                        key=key,
+                        action="portable_row_insert",
+                        status="safe",
+                        safe=True,
+                        message=f"Incoming {table} row can be inserted by stable key.",
+                        incoming_value=right,
+                        payload={"table": table, "row": right},
+                    )
+                )
+                continue
+            if right is None:
+                add_summary(summary, entity, "only_local")
+                continue
+            compare_columns = [
+                column.name
+                for column in model.__table__.columns
+                if column.name not in PORTABLE_AUDIT_COLUMNS
+            ]
+            differences = {
+                column: {"local": left.get(column), "incoming": right.get(column)}
+                for column in compare_columns
+                if not portable_values_equal(column, left.get(column), right.get(column))
+            }
+            if differences:
+                add_summary(summary, entity, "conflict")
+                operations.append(
+                    op(
+                        entity=entity,
+                        key=key,
+                        action="portable_row_conflict",
+                        status="conflict",
+                        message=f"{table} differs for stable key; no automatic overwrite.",
+                        local_value={column: values["local"] for column, values in differences.items()},
+                        incoming_value={column: values["incoming"] for column, values in differences.items()},
+                    )
+                )
+            else:
+                add_summary(summary, entity, "same")
 
 
 def manual_rows(db: Session) -> dict[str, dict[str, Any]]:
@@ -1305,6 +1497,7 @@ def build_db_sync_plan(db: Session, incoming_path: str) -> dict[str, Any]:
         compare_sample_metadata(db, connection, source_name=source_name, stamp=stamp, summary=summary, operations=operations)
         compare_sentinel_reviews(db, connection, source_name=source_name, stamp=stamp, summary=summary, operations=operations)
         compare_sentinel_download_metadata(db, connection, summary=summary, operations=operations)
+        compare_portable_tables(db, connection, summary=summary, operations=operations)
         compare_cache_diagnostics(db, connection, incoming_db_path=resolved, summary=summary, operations=diagnostics)
         compare_hansen_summary(connection, summary=summary)
     cache_repair = sentinel_cache_repair_payload(db)
@@ -1452,6 +1645,25 @@ def apply_operation(db: Session, item: dict[str, Any]) -> None:
     action = item["action"]
     key = item["key"]
     payload = item.get("payload") or {}
+
+    if action == "portable_row_insert":
+        table = payload.get("table")
+        specs_by_table = {spec[1]: spec for spec in PORTABLE_TABLE_SPECS}
+        if table not in specs_by_table:
+            raise DbSyncError(f"Unsupported portable sync table: {table}")
+        model = specs_by_table[table][2]
+        allowed_columns = [column.name for column in model.__table__.columns]
+        row = {
+            column: payload["row"].get(column)
+            for column in allowed_columns
+        }
+        column_sql = ", ".join(allowed_columns)
+        value_sql = ", ".join(f":{column}" for column in allowed_columns)
+        db.execute(
+            text(f"INSERT OR IGNORE INTO {table} ({column_sql}) VALUES ({value_sql})"),
+            row,
+        )
+        return
 
     if action == "manual_insert":
         row = payload["row"]

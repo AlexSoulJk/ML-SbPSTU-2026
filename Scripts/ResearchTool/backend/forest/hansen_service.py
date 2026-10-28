@@ -9,6 +9,7 @@ from typing import Any, Callable
 import numpy as np
 import rasterio
 from PIL import Image
+from rasterio.enums import Resampling
 from rasterio.mask import mask as rio_mask
 from rasterio.transform import array_bounds
 from rasterio.warp import transform_bounds, transform_geom
@@ -29,6 +30,8 @@ TOO_OLD_EVENT_YEAR_CUTOFF = 2016
 MULTIPLE_EVENT_YEAR_CUTOFF = 2016
 MULTIPLE_EVENT_MIN_YEAR_COUNT = 3
 HANSEN_LOSS_YEAR_ALPHA = 205
+HANSEN_TILE_PREVIEW_MAX_SIZE = 2048
+HANSEN_TILE_PREVIEW_SCHEMA_VERSION = 1
 HANSEN_LOSS_YEAR_COLORS = [
     "#1f77b4",
     "#ff7f0e",
@@ -178,6 +181,151 @@ def write_png(path: Path, rgba: np.ndarray) -> None:
 
 def cache_url(path: Path) -> str | None:
     return forest_cache_url(path)
+
+
+def safe_cache_segment(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in value)
+
+
+def existing_lossyear_tile(db: Session, tile_id: str) -> tuple[HansenTile | None, Path, str]:
+    canonical = FOREST_HANSEN_CACHE_DIR / HANSEN_VERSION / "lossyear" / f"{tile_id}.tif"
+    if canonical.exists():
+        row = db.scalar(
+            select(HansenTile).where(
+                HansenTile.layer == "lossyear",
+                HansenTile.tile_id == tile_id,
+                HansenTile.version == HANSEN_VERSION,
+            )
+        )
+        return row, canonical, HANSEN_VERSION
+
+    rows = list(
+        db.scalars(
+            select(HansenTile)
+            .where(HansenTile.layer == "lossyear", HansenTile.tile_id == tile_id)
+            .order_by(HansenTile.downloaded_at.desc(), HansenTile.id.desc())
+        )
+    )
+    for row in rows:
+        path = resolve_storage_path(row.local_path)
+        if path.exists():
+            return row, path, row.version
+
+    local_matches = sorted(
+        FOREST_HANSEN_CACHE_DIR.glob(f"*/lossyear/{tile_id}.tif"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    if local_matches:
+        path = local_matches[0]
+        return None, path, path.parent.parent.name
+
+    raise FileNotFoundError(
+        f"Hansen lossyear tile {tile_id} is not available in the local cache. "
+        "Run Hansen analysis for this sample first."
+    )
+
+
+def hansen_tile_preview_payload(
+    db: Session,
+    sample: Sample,
+    *,
+    max_size: int = HANSEN_TILE_PREVIEW_MAX_SIZE,
+) -> dict[str, Any]:
+    """Build a browser-sized categorical preview for the sample's full 10x10 degree tile."""
+    if max_size < 64:
+        raise ValueError("Hansen tile preview max_size must be at least 64 pixels.")
+
+    tile_id = tile_id_for_lonlat(sample.lon, sample.lat)
+    tile_row, source_path, version = existing_lossyear_tile(db, tile_id)
+    source_stat = source_path.stat()
+    fingerprint = {
+        "schema_version": HANSEN_TILE_PREVIEW_SCHEMA_VERSION,
+        "source_path": to_storage_path(source_path) or str(source_path),
+        "source_size": source_stat.st_size,
+        "source_mtime_ns": source_stat.st_mtime_ns,
+        "max_size": int(max_size),
+    }
+    preview_dir = (
+        FOREST_HANSEN_CACHE_DIR
+        / "tile_previews"
+        / safe_cache_segment(version)
+        / "lossyear"
+    )
+    png_path = preview_dir / f"{tile_id}.png"
+    metadata_path = preview_dir / f"{tile_id}.json"
+    metadata: dict[str, Any] | None = None
+    cache_hit = False
+
+    if png_path.exists() and metadata_path.exists():
+        try:
+            cached = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if cached.get("fingerprint") == fingerprint:
+                metadata = cached
+                cache_hit = True
+        except (OSError, ValueError, TypeError):
+            metadata = None
+
+    if metadata is None:
+        with rasterio.open(source_path) as dataset:
+            scale = min(1.0, float(max_size) / max(dataset.width, dataset.height))
+            preview_width = max(1, int(round(dataset.width * scale)))
+            preview_height = max(1, int(round(dataset.height * scale)))
+            loss = dataset.read(
+                1,
+                out_shape=(preview_height, preview_width),
+                resampling=Resampling.nearest,
+            )
+            bbox = lonlat_bbox(dataset.transform, dataset.width, dataset.height, dataset.crs)
+            source_width = dataset.width
+            source_height = dataset.height
+            source_crs = str(dataset.crs) if dataset.crs else None
+
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        temporary_png = png_path.with_name(f".{png_path.stem}.{uuid.uuid4().hex}.tmp.png")
+        write_png(temporary_png, rgba_loss_year(loss))
+        temporary_png.replace(png_path)
+        metadata = {
+            "fingerprint": fingerprint,
+            "tile_id": tile_id,
+            "version": version,
+            "layer": "lossyear",
+            "bbox": [round(float(value), 10) for value in bbox],
+            "legend": loss_year_legend(loss),
+            "source_dimensions": [source_width, source_height],
+            "preview_dimensions": [preview_width, preview_height],
+            "source_crs": source_crs,
+        }
+        temporary_metadata = metadata_path.with_name(
+            f".{metadata_path.stem}.{uuid.uuid4().hex}.tmp.json"
+        )
+        temporary_metadata.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_metadata.replace(metadata_path)
+
+    png_url = cache_url(png_path)
+    if png_url is None:
+        raise RuntimeError(f"Hansen tile preview is outside the forest cache: {png_path}")
+
+    return {
+        "preview_kind": "hansen_tile_lossyear",
+        "sample_id": sample.sample_id,
+        "tile_id": tile_id,
+        "tile_row_id": tile_row.id if tile_row is not None else None,
+        "version": metadata["version"],
+        "layer": metadata["layer"],
+        "mask_type": "tile_all_loss",
+        "png_url": f"{png_url}?v={fingerprint['source_mtime_ns']}",
+        "png_exists": True,
+        "bbox": metadata["bbox"],
+        "legend": metadata["legend"],
+        "source_dimensions": metadata["source_dimensions"],
+        "preview_dimensions": metadata["preview_dimensions"],
+        "source_crs": metadata["source_crs"],
+        "cache_hit": cache_hit,
+    }
 
 
 def mask_tif_path(mask: HansenMask) -> Path:

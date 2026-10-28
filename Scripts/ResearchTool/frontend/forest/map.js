@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=forest-event-fix-1";
+import { forestState } from "./state.js?v=hansen-whole-tile-1";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 
@@ -65,7 +65,9 @@ function debugMap(message, data = {}) {
 function ensureForestPanes(map) {
   const panes = [
     ["forestSentinelPane", 330, "none"],
+    ["forestHansenTilePane", 345, "none"],
     ["forestRasterPane", 360, "none"],
+    ["forestHansenTileBorderPane", 540, "none"],
     ["forestShapePane", 560, "none"],
     ["forestMarkerPane", 660, "auto"],
   ];
@@ -289,6 +291,8 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
     active_preview_bbox: Boolean(forestState.activeSentinelPreview?.bbox),
     hansen_visible: Boolean(visibility.hansen),
     hansen_layer: forestState.hansenLayer || null,
+    hansen_tile_visible: Boolean(visibility.hansenTile),
+    hansen_tile_id: forestState.hansenTilePreview?.tile_id || null,
   });
 
   if (visibility.samples && samples.length) {
@@ -364,6 +368,70 @@ export function renderForestMap({ samples, nearest, detail, visibility, onSelect
         has_url: Boolean(forestState.activeSentinelPreview?.url),
         has_bbox: Boolean(forestState.activeSentinelPreview?.bbox),
         cache_exists: forestState.activeSentinelPreview?.cache_exists ?? null,
+      });
+    }
+
+    const tileOverlay = visibility.hansenTile
+      && forestState.hansenTilePreviewSampleId === detail.sample_id
+      ? forestState.hansenTilePreview
+      : null;
+    if (tileOverlay?.png_url && tileOverlay?.bbox) {
+      debugMap("hansen tile overlay add", {
+        tile_id: tileOverlay.tile_id || null,
+        url: tileOverlay.png_url,
+        cache_hit: tileOverlay.cache_hit ?? null,
+      });
+      const tileImage = L.imageOverlay(
+        tileOverlay.png_url,
+        bboxToBounds(tileOverlay.bbox),
+        {
+          pane: "forestHansenTilePane",
+          opacity: forestState.hansenOpacity,
+          interactive: false,
+          className: `forestHansenOverlay forestHansenTileOverlay ${forestState.hansenPixelated ? "pixelated" : ""}`,
+        },
+      );
+      tileImage.on("load", () => {
+        debugMap("hansen tile overlay loaded", {
+          tile_id: tileOverlay.tile_id || null,
+          url: tileOverlay.png_url,
+        });
+      });
+      tileImage.on("error", () => {
+        debugMap("hansen tile overlay missing cache", {
+          tile_id: tileOverlay.tile_id || null,
+          url: tileOverlay.png_url,
+        });
+        removeLayer("hansenTile");
+        removeLayer("hansenTileBounds");
+      });
+      forestState.layers.hansenTile = tileImage.addTo(map);
+      const tileBounds = bboxToBounds(tileOverlay.bbox);
+      forestState.layers.hansenTileBounds = L.layerGroup([
+        L.rectangle(tileBounds, {
+          pane: "forestHansenTileBorderPane",
+          color: "#ffffff",
+          weight: 5,
+          opacity: 0.9,
+          fill: false,
+          interactive: false,
+        }),
+        L.rectangle(tileBounds, {
+          pane: "forestHansenTileBorderPane",
+          color: "#263832",
+          weight: 2,
+          opacity: 1,
+          dashArray: "10 7",
+          fill: false,
+          interactive: false,
+        }),
+      ]).addTo(map);
+    } else if (visibility.hansenTile) {
+      debugMap("hansen tile overlay skipped", {
+        selected_sample_id: detail.sample_id,
+        preview_sample_id: forestState.hansenTilePreviewSampleId,
+        loading: forestState.hansenTilePreviewLoading,
+        error: forestState.hansenTilePreviewError,
       });
     }
 
