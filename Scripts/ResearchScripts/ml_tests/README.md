@@ -2,6 +2,8 @@
 
 The primary research interface is `forest_ml_experiments.ipynb`. The notebook keeps orchestration and compact outputs in cells while database access, RemoteCLIP inference, caching, splits, and metrics live in Python modules.
 
+`valid_post_sample_evaluation.ipynb` is the companion sample-structure report. Its first half uses only eligible `MANUAL_VALID` POST-event embeddings for PCA, K-Means, GMM, HDBSCAN, and stability. The diagnostic half reconstructs the exact frozen `REMOTECLIP_LOGREG/v1` training cohort, adds leave-one-out knownness, class-conditional similarity, reject curves, train-vs-Hansen domain-shift checks, RemoteCLIP/XGBoost interaction, and a combined event-level export. Existing embeddings are reused from the fingerprinted cache.
+
 Install notebook dependencies from the repository root:
 
 ```powershell
@@ -12,6 +14,12 @@ Start Jupyter Lab:
 
 ```powershell
 .\.venv\Scripts\python.exe -m jupyter lab Scripts\ResearchScripts\ml_tests\forest_ml_experiments.ipynb
+```
+
+For the sample-structure evaluation:
+
+```powershell
+.\.venv\Scripts\python.exe -m jupyter lab Scripts\ResearchScripts\ml_tests\valid_post_sample_evaluation.ipynb
 ```
 
 The notebook defaults to:
@@ -45,3 +53,17 @@ Scripts/ResearchTool/Data/forest/models/remoteclip_logreg/<version>/
 ```
 
 Existing versions are protected unless `OVERWRITE_REMOTECLIP_ARTIFACT = True` is set explicitly. The manifest includes the artifact hash, database fingerprint, training cohort, feature variant, class order, decision threshold, RemoteCLIP checkpoint hash, and a round-trip smoke-test result.
+
+The latent diagnostic section is read-only. It audits the reconstructed
+`MANUAL_VALID + PRE_POST` event-id hash against the production model manifest and
+surfaces a mismatch without silently retraining or replacing the frozen artifact.
+The default `UNKNOWN` (`manual LOO knownness k=5, p05`) and `AMBIGUOUS`
+(`P(Wildfire) in 0.40..0.60`) flags are diagnostic exports only; they are not fitted
+on Hansen-mined events. HDBSCAN noise is reported separately and never implies
+`UNKNOWN` automatically.
+
+Each completed latent-diagnostic run also writes `REPORT.md` into its run
+directory. It is a human-readable summary assembled from the same in-memory
+tables as the CSV exports and includes cohort audit, cluster structure,
+knownness/reject diagnostics, Hansen domain shift, model interaction, and
+stability results.

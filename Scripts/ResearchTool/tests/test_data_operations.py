@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from unittest.mock import patch
@@ -26,6 +27,13 @@ from backend.forest.event_service import (  # noqa: E402
     upsert_event_download_link,
 )
 from backend.forest.event_review_service import save_event_review  # noqa: E402
+import backend.forest.bundle_service as bundle_service  # noqa: E402
+from backend.forest.bundle_service import (  # noqa: E402
+    MIB,
+    bundle_partition_summary,
+    export_multipart_bundle,
+    partition_bundle_downloads,
+)
 from backend.forest.hansen_service import hansen_tile_preview_payload  # noqa: E402
 from backend.forest.db_sync_service import apply_operation, compare_portable_tables  # noqa: E402
 from backend.forest.model_labeling_service import build_model_labeling_plan  # noqa: E402
@@ -45,6 +53,7 @@ from backend.forest.candidate_service import (  # noqa: E402
     CandidateMiningOptions,
     candidate_mask_run_status,
     candidate_hansen_preview_payload,
+    candidate_run_payload,
     generate_candidate_masks_for_run,
     hansen_tile_inventory,
     materialize_candidates,
@@ -70,7 +79,12 @@ from backend.forest.models import (  # noqa: E402
     SampleEventDownload,
     SentinelDownload,
 )
-from backend.forest.routes import SentinelBatchRequest, samples_select, selected_batch_samples  # noqa: E402
+from backend.forest.routes import (  # noqa: E402
+    SentinelBatchRequest,
+    data_operation_input_path,
+    samples_select,
+    selected_batch_samples,
+)
 from backend.forest.sentinel_batch_service import (  # noqa: E402
     BatchOptions,
     execute_sentinel_batch,
@@ -119,6 +133,179 @@ class DataOperationsTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
         self.engine.dispose()
+
+    def test_data_operation_artifact_accepts_forest_exports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            exports_root = Path(temp_dir) / "exports"
+            artifact_path = exports_root / "hansen_candidate_mining" / "run-1" / "summary.json"
+            artifact_path.parent.mkdir(parents=True)
+            artifact_path.write_text("{}", encoding="utf-8")
+
+            with patch("backend.forest.routes.FOREST_EXPORTS_DIR", exports_root):
+                resolved = data_operation_input_path(str(artifact_path))
+
+            self.assertEqual(resolved, artifact_path.resolve())
+
+    def test_candidate_run_does_not_advertise_missing_local_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run = HansenCandidateRun(
+                run_id="run-with-remote-artifact",
+                algorithm_name="fixture",
+                algorithm_version="v1",
+                hansen_dataset_version="fixture",
+                status="PLANNED",
+                target_count=1,
+                config_json="{}",
+                artifact_path=str(Path(temp_dir) / "not-transferred"),
+            )
+            self.db.add(run)
+            self.db.commit()
+
+            payload = candidate_run_payload(self.db, run.run_id)
+
+            self.assertIsNone(payload["artifacts"])
+
+    def test_bundle_partition_keeps_download_files_together(self) -> None:
+        download_ids = ["download-a", "download-b", "download-c"]
+        files = [
+            {
+                "download_id": download_id,
+                "relative_path": f"cache/{download_id}.tif",
+                "bytes": 4 * MIB,
+                "exists": True,
+            }
+            for download_id in download_ids
+        ]
+        files.extend(
+            {
+                "download_id": download_id,
+                "relative_path": f"cache/{download_id}.json",
+                "bytes": 1024,
+                "exists": True,
+            }
+            for download_id in download_ids
+        )
+
+        parts = partition_bundle_downloads(download_ids, files, max_zip_size_mib=10)
+
+        self.assertEqual([part["download_ids"] for part in parts], [download_ids[:2], download_ids[2:]])
+        for part in parts:
+            self.assertEqual(
+                {row["download_id"] for row in part["files"]},
+                set(part["download_ids"]),
+            )
+
+    def test_bundle_partition_summary_reports_part_count(self) -> None:
+        download_ids = ["download-a", "download-b", "download-c"]
+        files = [
+            {
+                "download_id": download_id,
+                "bytes": 6 * MIB,
+                "exists": True,
+            }
+            for download_id in download_ids
+        ]
+
+        summary = bundle_partition_summary(download_ids, files, max_zip_size_mib=10)
+
+        self.assertEqual(summary["estimated_zip_parts"], 3)
+        self.assertEqual(summary["max_zip_size_mib"], 10)
+        self.assertEqual(summary["largest_part_estimated_bytes"], 6 * MIB)
+
+    def test_multipart_bundle_parts_are_independently_importable_zips(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sources: dict[str, Path] = {}
+            downloads: list[SentinelDownload] = []
+            files: list[dict] = []
+            for suffix in ("a", "b"):
+                download_id = f"download-{suffix}"
+                relative_path = f"cache/{download_id}.tif"
+                source_path = root / f"{download_id}.tif"
+                source_path.write_bytes(f"raster-{suffix}".encode("ascii"))
+                sources[relative_path] = source_path
+                downloads.append(
+                    SentinelDownload(
+                        download_id=download_id,
+                        sample_id=f"sample-{suffix}",
+                        scene_id=f"scene-{suffix}",
+                        period="POST",
+                        local_path=relative_path,
+                        bbox_json="[0, 0, 1, 1]",
+                        bands_json="[]",
+                        metadata_json="{}",
+                    )
+                )
+                files.append(
+                    {
+                        "kind": "sentinel_raster_tif",
+                        "download_id": download_id,
+                        "sample_id": f"sample-{suffix}",
+                        "scene_id": f"scene-{suffix}",
+                        "period": "POST",
+                        "preview_id": "",
+                        "view": "",
+                        "relative_path": relative_path,
+                        "exists": True,
+                        "bytes": 6 * MIB,
+                        "sha256": "fixture",
+                        "action": "pending",
+                        "error": "",
+                    }
+                )
+            plan = {
+                "download_ids": [download.download_id for download in downloads],
+                "files": files,
+                "events": [],
+                "event_links": [],
+                "summary": bundle_partition_summary(
+                    [download.download_id for download in downloads],
+                    files,
+                    max_zip_size_mib=10,
+                ),
+            }
+
+            with (
+                patch.object(bundle_service, "output_dir", return_value=root / "bundle"),
+                patch.object(
+                    bundle_service,
+                    "resolve_storage_path",
+                    side_effect=lambda value: sources[str(value)],
+                ),
+                patch.object(
+                    bundle_service,
+                    "resolved_raster_path",
+                    side_effect=lambda download: (
+                        sources[f"cache/{download.download_id}.tif"],
+                        None,
+                    ),
+                ),
+                patch.object(
+                    bundle_service,
+                    "portable_path",
+                    side_effect=lambda path: f"cache/{Path(path).name}",
+                ),
+            ):
+                result = export_multipart_bundle(
+                    self.db,
+                    plan,
+                    downloads,
+                    profile="geotiff_only",
+                    exclude_reviewed_bad=True,
+                    source="test",
+                    max_zip_size_mib=10,
+                )
+
+            self.assertEqual(len(result["archive_paths"]), 2)
+            for archive_path in result["archive_paths"]:
+                with zipfile.ZipFile(archive_path) as archive:
+                    manifest = json.loads(archive.read("manifest.json"))
+                    self.assertEqual(len(manifest["downloads"]), 1)
+                    self.assertEqual(manifest["multipart"]["part_count"], 2)
+                    self.assertIn(
+                        f"files/{manifest['files'][0]['relative_path']}",
+                        archive.namelist(),
+                    )
 
     def test_sentinel_qc_marks_scl_snow_as_bad_quality(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1613,6 +1613,7 @@ def data_operation_input_path(raw_path: str, *, suffixes: set[str] | None = None
     path = Path(raw_path).resolve(strict=False)
     allowed_roots = [
         FOREST_IMPORTS_DIR.resolve(strict=False),
+        FOREST_EXPORTS_DIR.resolve(strict=False),
         (PROJECT_ROOT / "Scripts" / "ResearchScripts" / "Outputs").resolve(strict=False),
     ]
     try:

@@ -829,11 +829,17 @@ def candidate_run_payload(db: Session, run_id: str) -> dict[str, Any]:
     artifacts = None
     if run.artifact_path:
         artifact_dir = resolve_storage_path(run.artifact_path)
-        artifacts = {
-            "candidates_csv": to_storage_path(artifact_dir / "candidates.csv"),
-            "tile_inventory_csv": to_storage_path(artifact_dir / "tile_inventory.csv"),
-            "summary_json": to_storage_path(artifact_dir / "summary.json"),
+        artifact_files = {
+            "candidates_csv": artifact_dir / "candidates.csv",
+            "tile_inventory_csv": artifact_dir / "tile_inventory.csv",
+            "summary_json": artifact_dir / "summary.json",
         }
+        available_artifacts = {
+            name: to_storage_path(path)
+            for name, path in artifact_files.items()
+            if path.is_file()
+        }
+        artifacts = available_artifacts or None
     mask_status = candidate_mask_run_status(db, run_id)
     return {
         "run_id": run.run_id,
