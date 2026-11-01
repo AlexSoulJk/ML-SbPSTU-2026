@@ -37,6 +37,7 @@ from backend.forest.sentinel_service import (  # noqa: E402
     SENTINEL_LOW_CONTRAST_RANGE_THRESHOLD,
     SENTINEL_LOW_CONTRAST_RELATIVE_THRESHOLD,
     SENTINEL_NODATA_THRESHOLD,
+    SENTINEL_SNOW_THRESHOLD,
     SENTINEL_SHADOW_THRESHOLD,
     auto_review_reasons,
     cloud_metrics,
@@ -77,6 +78,7 @@ def write_report(rows: list[dict[str, object]]) -> Path:
         "existing_notes",
         "cloud_fraction",
         "shadow_fraction",
+        "snow_fraction",
         "nodata_fraction",
         "dark_fraction",
         "brightness_p05",
@@ -87,6 +89,7 @@ def write_report(rows: list[dict[str, object]]) -> Path:
         "quality_flags",
         "cloud_threshold",
         "shadow_threshold",
+        "snow_threshold",
         "nodata_threshold",
         "dark_brightness_threshold",
         "dark_low_contrast_p95_threshold",
@@ -355,6 +358,7 @@ def main() -> None:
             if not DRY_RUN:
                 download.cloud_fraction = float(metrics["cloud_fraction"])
                 download.shadow_fraction = float(metrics["shadow_fraction"])
+                download.snow_fraction = float(metrics["snow_fraction"])
                 download.nodata_fraction = float(metrics["nodata_fraction"])
                 download.dark_fraction = float(metrics["dark_fraction"])
                 download.is_bad_cloud = bool(metrics["is_bad_cloud"])
@@ -377,6 +381,7 @@ def main() -> None:
                     },
                     "cloud_fraction": metrics["cloud_fraction"],
                     "shadow_fraction": metrics["shadow_fraction"],
+                    "snow_fraction": metrics["snow_fraction"],
                     "nodata_fraction": metrics["nodata_fraction"],
                     "dark_fraction": metrics["dark_fraction"],
                     "brightness_p05": metrics["brightness_p05"],
@@ -387,6 +392,7 @@ def main() -> None:
                     "quality_flags": flags_json,
                     "cloud_threshold": SENTINEL_CLOUD_THRESHOLD,
                     "shadow_threshold": SENTINEL_SHADOW_THRESHOLD,
+                    "snow_threshold": SENTINEL_SNOW_THRESHOLD,
                     "nodata_threshold": SENTINEL_NODATA_THRESHOLD,
                     "dark_brightness_threshold": SENTINEL_DARK_BRIGHTNESS_THRESHOLD,
                     "dark_low_contrast_p95_threshold": SENTINEL_DARK_LOW_CONTRAST_P95_THRESHOLD,
@@ -411,6 +417,7 @@ def main() -> None:
         "Thresholds: "
         f"cloud>{SENTINEL_CLOUD_THRESHOLD:.0%}, "
         f"shadow>{SENTINEL_SHADOW_THRESHOLD:.0%}, "
+        f"snow>={SENTINEL_SNOW_THRESHOLD:.0%}, "
         f"nodata>{SENTINEL_NODATA_THRESHOLD:.0%}, "
         "DARK_AND_LOW_CONTRAST: "
         f"p95<{SENTINEL_DARK_LOW_CONTRAST_P95_THRESHOLD:g} and "

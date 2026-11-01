@@ -188,6 +188,12 @@ export async function materializeHansenCandidates(runId, candidateIds) {
   });
 }
 
+export async function startHansenCandidateMasks(runId) {
+  return api(`/api/forest/data-operations/hansen-mining/runs/${encodeURIComponent(runId)}/mask-jobs`, {
+    method: "POST",
+  });
+}
+
 export async function saveEventReview(eventId, payload) {
   return api(`/api/forest/events/${encodeURIComponent(eventId)}/review`, {
     method: "PUT",

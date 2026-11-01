@@ -17,7 +17,11 @@ SAMPLE_ID_PREFIXES: tuple[str, ...] = ()
 MODE = "empty_samples"
 SEASONS = ("spring", "early_summer", "late_summer", "autumn")
 
+# Valid target is applied independently to PRE and POST for every Hansen event.
+# With all seasons enabled, 10 is split as spring 2 / early summer 3 /
+# late summer 3 / autumn 2.
 TARGET_VALID_SCENES = 10
+# Total locally checked-scene budget per event, shared between PRE and POST.
 MAX_QC_SCENES = 50
 MIN_DAYS_BETWEEN_ACCEPTED = 7
 STAC_MAX_CLOUD = 30.0

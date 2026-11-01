@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=model-labeling-inference-3";
+import { forestState } from "./state.js?v=candidate-hansen-masks-2";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 

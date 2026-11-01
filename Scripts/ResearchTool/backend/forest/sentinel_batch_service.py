@@ -39,6 +39,13 @@ from .storage_paths import resolve_storage_path
 
 
 DEFAULT_SEASONS = ("spring", "early_summer", "late_summer", "autumn")
+TARGET_PERIODS = ("PRE", "POST")
+DEFAULT_SEASON_WEIGHTS = {
+    "spring": 2,
+    "early_summer": 3,
+    "late_summer": 3,
+    "autumn": 2,
+}
 DEFAULT_TARGET_VALID = 10
 DEFAULT_MAX_QC_SCENES = 50
 DEFAULT_MIN_DAYS = 7
@@ -74,10 +81,61 @@ class BatchOptions:
             raise ValueError(f"Unknown season preset(s): {', '.join(unknown)}")
         if self.target_valid < 1:
             raise ValueError("target_valid must be positive.")
-        if self.max_qc_scenes < self.target_valid:
-            raise ValueError("max_qc_scenes must be greater than or equal to target_valid.")
+        minimum_qc = len(TARGET_PERIODS) * self.target_valid
+        if self.max_qc_scenes < minimum_qc:
+            raise ValueError(
+                "max_qc_scenes is an event-level cap and must cover both PRE and POST "
+                f"targets (at least {minimum_qc})."
+            )
         if self.min_days < 0:
             raise ValueError("min_days cannot be negative.")
+        if len(set(self.seasons)) != len(self.seasons):
+            raise ValueError("Season presets must be unique.")
+
+
+RelationKey = tuple[str, str]
+TargetKey = tuple[str, str, str]
+
+
+def distribute_budget(total: int, seasons: tuple[str, ...]) -> dict[str, int]:
+    """Distribute a budget deterministically while preserving the 2/3/3/2 profile."""
+    weights = {season: DEFAULT_SEASON_WEIGHTS.get(season, 1) for season in seasons}
+    weight_sum = sum(weights.values())
+    raw = {season: total * weights[season] / weight_sum for season in seasons}
+    result = {season: int(raw[season]) for season in seasons}
+    remainder = total - sum(result.values())
+    order = sorted(
+        seasons,
+        key=lambda season: (raw[season] - result[season], weights[season], -seasons.index(season)),
+        reverse=True,
+    )
+    for season in order[:remainder]:
+        result[season] += 1
+    return result
+
+
+def season_valid_targets(options: BatchOptions) -> dict[str, int]:
+    return distribute_budget(options.target_valid, options.seasons)
+
+
+def season_qc_caps(options: BatchOptions) -> dict[str, int]:
+    return distribute_budget(options.max_qc_scenes, options.seasons)
+
+
+def period_season_qc_caps(options: BatchOptions) -> dict[tuple[str, str], int]:
+    """Split one event's QC budget across PRE/POST without seasonal starvation."""
+    result: dict[tuple[str, str], int] = {}
+    period_totals = {period: 0 for period in TARGET_PERIODS}
+    for season, season_cap in season_qc_caps(options).items():
+        base, remainder = divmod(season_cap, len(TARGET_PERIODS))
+        for period in TARGET_PERIODS:
+            result[(period, season)] = base
+            period_totals[period] += base
+        for _ in range(remainder):
+            period = min(TARGET_PERIODS, key=lambda item: (period_totals[item], TARGET_PERIODS.index(item)))
+            result[(period, season)] += 1
+            period_totals[period] += 1
+    return result
 
 
 def operation_key(event_id: str, period: str, season: str) -> str:
@@ -96,6 +154,17 @@ def period_for_year(event_year: int, calendar_year: int) -> str | None:
 
 def calendar_year_for_period(event_year: int, period: str) -> int:
     return event_year + {"PRE": -1, "EVENT": 0, "POST": 1}[period]
+
+
+def season_for_datetime(value: datetime | None, seasons: tuple[str, ...]) -> str | None:
+    if value is None:
+        return None
+    mmdd = value.strftime("%m-%d")
+    for season in seasons:
+        start_mmdd, end_mmdd = SEASON_PRESETS[season]
+        if start_mmdd <= mmdd <= end_mmdd:
+            return season
+    return None
 
 
 def decode_json(raw: str | None, fallback: Any) -> Any:
@@ -150,6 +219,7 @@ def passed_local_qc(download: SentinelDownload) -> bool:
         for value in (
             download.cloud_fraction,
             download.shadow_fraction,
+            download.snow_fraction,
             download.nodata_fraction,
             download.dark_fraction,
             download.quality_flags_json,
@@ -175,13 +245,160 @@ def sample_is_too_old(sample: Sample) -> bool:
     return any(status.source == "hansen" and status.status == "TOO_OLD" for status in sample.statuses)
 
 
-def build_operation_rows(events: list[SampleEvent], seasons: tuple[str, ...]) -> list[dict[str, Any]]:
+def target_key(event: SampleEvent, period: str, season: str) -> TargetKey:
+    return event.event_id, period, season
+
+
+def relation_key(event: SampleEvent, period: str) -> RelationKey:
+    return event.event_id, period
+
+
+def target_keys(events: list[SampleEvent], options: BatchOptions) -> list[TargetKey]:
+    return [
+        target_key(event, period, season)
+        for event in events
+        for period in TARGET_PERIODS
+        for season in options.seasons
+    ]
+
+
+def matching_relations(events: list[SampleEvent], calendar_year: int) -> list[tuple[SampleEvent, str]]:
+    relations: list[tuple[SampleEvent, str]] = []
+    for event in events:
+        period = period_for_year(event.event_year, calendar_year)
+        if period in TARGET_PERIODS:
+            relations.append((event, period))
+    return relations
+
+
+def empty_quota_state(events: list[SampleEvent], options: BatchOptions) -> dict[str, Any]:
+    return {
+        "season_targets": season_valid_targets(options),
+        "season_qc_caps": season_qc_caps(options),
+        "period_season_qc_caps": period_season_qc_caps(options),
+        "valid_by_target": {key: set() for key in target_keys(events, options)},
+        "accepted_by_relation": {
+            relation_key(event, period): set()
+            for event in events
+            for period in TARGET_PERIODS
+        },
+        "dates_by_relation": {
+            relation_key(event, period): []
+            for event in events
+            for period in TARGET_PERIODS
+        },
+        "qc_by_target": {
+            target_key(event, period, season): set()
+            for event in events
+            for period in TARGET_PERIODS
+            for season in options.seasons
+        },
+    }
+
+
+def record_qc_download(
+    state: dict[str, Any],
+    download: SentinelDownload,
+    season: str,
+    relations: list[tuple[SampleEvent, str]],
+) -> None:
+    for event, period in relations:
+        state["qc_by_target"][target_key(event, period, season)].add(download.download_id)
+
+
+def record_valid_download(
+    state: dict[str, Any],
+    download: SentinelDownload,
+    value: datetime | None,
+    season: str,
+    relations: list[tuple[SampleEvent, str]],
+    options: BatchOptions,
+) -> list[TargetKey]:
+    accepted: list[TargetKey] = []
+    for event, period in relations:
+        key = target_key(event, period, season)
+        relation = relation_key(event, period)
+        selected = state["valid_by_target"][key]
+        if len(selected) >= state["season_targets"][season]:
+            continue
+        if download.download_id in state["accepted_by_relation"][relation]:
+            continue
+        if not date_gap_ok(value, state["dates_by_relation"][relation], options.min_days):
+            continue
+        selected.add(download.download_id)
+        state["accepted_by_relation"][relation].add(download.download_id)
+        if value is not None:
+            state["dates_by_relation"][relation].append(value)
+        accepted.append(key)
+    return accepted
+
+
+def build_quota_state(
+    downloads: list[SentinelDownload],
+    reviews: dict[str, SentinelSceneReview],
+    events: list[SampleEvent],
+    options: BatchOptions,
+) -> dict[str, Any]:
+    state = empty_quota_state(events, options)
+    for download in sorted(downloads, key=download_sort_key):
+        value = download_datetime(download)
+        season = season_for_datetime(value, options.seasons)
+        if season is None or value is None:
+            continue
+        relations = matching_relations(events, value.year)
+        if not relations:
+            continue
+        if passed_local_qc(download):
+            record_qc_download(state, download, season, relations)
+        if download_is_valid(download, reviews.get(download.download_id), options.local_cloud_threshold):
+            record_valid_download(state, download, value, season, relations, options)
+    return state
+
+
+def target_is_full(state: dict[str, Any], key: TargetKey) -> bool:
+    return len(state["valid_by_target"][key]) >= state["season_targets"][key[2]]
+
+
+def target_qc_cap_reached(state: dict[str, Any], key: TargetKey) -> bool:
+    _event_id, period, season = key
+    return (
+        len(state["qc_by_target"][key])
+        >= state["period_season_qc_caps"][(period, season)]
+    )
+
+
+def target_slots(state: dict[str, Any], keys: Iterable[TargetKey]) -> tuple[int, int]:
+    key_list = list(keys)
+    valid = sum(len(state["valid_by_target"][key]) for key in key_list)
+    target = sum(state["season_targets"][key[2]] for key in key_list)
+    return valid, target
+
+
+def qc_slots(state: dict[str, Any], events: list[SampleEvent], options: BatchOptions) -> tuple[int, int]:
+    checked = sum(
+        len(state["qc_by_target"][target_key(event, period, season)])
+        for event in events
+        for period in TARGET_PERIODS
+        for season in options.seasons
+    )
+    return checked, len(events) * options.max_qc_scenes
+
+
+def build_operation_rows(
+    events: list[SampleEvent],
+    options: BatchOptions,
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for event in events:
-        for period in ("PRE", "EVENT", "POST"):
+        for period in TARGET_PERIODS:
             year = calendar_year_for_period(event.event_year, period)
-            for season in seasons:
+            for season in options.seasons:
                 start_mmdd, end_mmdd = SEASON_PRESETS[season]
+                key = target_key(event, period, season)
+                valid_count = len(state["valid_by_target"][key])
+                season_target = state["season_targets"][season]
+                qc_count = len(state["qc_by_target"][key])
                 rows.append(
                     {
                         "operation_key": operation_key(event.event_id, period, season),
@@ -193,27 +410,21 @@ def build_operation_rows(events: list[SampleEvent], seasons: tuple[str, ...]) ->
                         "season": season,
                         "start": f"{year}-{start_mmdd}",
                         "end": f"{year}-{end_mmdd}",
+                        "valid_count": valid_count,
+                        "target_valid": season_target,
+                        "deficit": max(0, season_target - valid_count),
+                        "qc_checked_count": qc_count,
+                        "max_qc_scenes": state["period_season_qc_caps"][(period, season)],
+                        "stop_reason": (
+                            "target_reached"
+                            if target_is_full(state, key)
+                            else "qc_cap_reached"
+                            if target_qc_cap_reached(state, key)
+                            else None
+                        ),
                     }
                 )
     return rows
-
-
-def sample_download_counts(
-    db: Session,
-    sample_id: str,
-    options: BatchOptions,
-) -> dict[str, int]:
-    downloads = list(
-        db.scalars(select(SentinelDownload).where(SentinelDownload.sample_id == sample_id))
-    )
-    reviews = reviews_by_download(db, (download.download_id for download in downloads))
-    qc_checked = sum(1 for download in downloads if passed_local_qc(download))
-    valid = sum(
-        1
-        for download in downloads
-        if download_is_valid(download, reviews.get(download.download_id), options.local_cloud_threshold)
-    )
-    return {"downloads": len(downloads), "qc_checked": qc_checked, "valid": valid}
 
 
 def plan_sentinel_batch(
@@ -225,7 +436,9 @@ def plan_sentinel_batch(
     planned: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for sample in samples:
-        counts = sample_download_counts(db, sample.sample_id, options)
+        downloads = list(
+            db.scalars(select(SentinelDownload).where(SentinelDownload.sample_id == sample.sample_id))
+        )
         if sample_is_too_old(sample):
             skipped.append({"sample_id": sample.sample_id, "reason": "too_old"})
             continue
@@ -233,14 +446,20 @@ def plan_sentinel_batch(
             if sample.manual_validation is not None:
                 skipped.append({"sample_id": sample.sample_id, "reason": "has_manual_validation"})
                 continue
-            if counts["downloads"]:
+            if downloads:
                 skipped.append({"sample_id": sample.sample_id, "reason": "already_has_downloads"})
                 continue
         events = sample_events(db, sample.sample_id)
         if not events:
             skipped.append({"sample_id": sample.sample_id, "reason": "no_sample_events"})
             continue
-        operations = build_operation_rows(events, options.seasons)
+        reviews = reviews_by_download(db, (download.download_id for download in downloads))
+        state = build_quota_state(downloads, reviews, events, options)
+        keys = target_keys(events, options)
+        valid_count, target_count = target_slots(state, keys)
+        qc_checked, qc_cap = qc_slots(state, events, options)
+        operations = build_operation_rows(events, options, state)
+        incomplete = [key for key in keys if not target_is_full(state, key)]
         planned.append(
             {
                 "sample_id": sample.sample_id,
@@ -248,16 +467,16 @@ def plan_sentinel_batch(
                 "display_name": sample.display_name or sample.source_id or sample.sample_id,
                 "driver": sample.driver_primary or sample.driver_secondary,
                 "event_count": len(events),
-                "valid_count": counts["valid"],
-                "qc_checked_count": counts["qc_checked"],
-                "target_valid": options.target_valid,
-                "max_qc_scenes": options.max_qc_scenes,
-                "deficit": max(0, options.target_valid - counts["valid"]),
+                "valid_count": valid_count,
+                "qc_checked_count": qc_checked,
+                "target_valid": target_count,
+                "max_qc_scenes": qc_cap,
+                "deficit": max(0, target_count - valid_count),
                 "stop_reason": (
                     "target_reached"
-                    if counts["valid"] >= options.target_valid
+                    if not incomplete
                     else "qc_cap_reached"
-                    if counts["qc_checked"] >= options.max_qc_scenes
+                    if all(target_qc_cap_reached(state, key) for key in incomplete)
                     else None
                 ),
                 "operations": operations,
@@ -271,6 +490,16 @@ def plan_sentinel_batch(
             "seasons": list(options.seasons),
             "target_valid": options.target_valid,
             "max_qc_scenes": options.max_qc_scenes,
+            "target_periods": list(TARGET_PERIODS),
+            "season_valid_targets": season_valid_targets(options),
+            "season_qc_caps": season_qc_caps(options),
+            "period_season_qc_caps": {
+                period: {
+                    season: period_season_qc_caps(options)[(period, season)]
+                    for season in options.seasons
+                }
+                for period in TARGET_PERIODS
+            },
             "min_days": options.min_days,
             "stac_max_cloud": options.stac_max_cloud,
             "local_cloud_threshold": options.local_cloud_threshold,
@@ -322,15 +551,6 @@ def ensure_cloud_review(db: Session, download: SentinelDownload, threshold: floa
         )
 
 
-def matching_relations(events: list[SampleEvent], calendar_year: int) -> list[tuple[SampleEvent, str]]:
-    relations: list[tuple[SampleEvent, str]] = []
-    for event in events:
-        period = period_for_year(event.event_year, calendar_year)
-        if period:
-            relations.append((event, period))
-    return relations
-
-
 def save_search_rows(
     db: Session,
     *,
@@ -380,7 +600,7 @@ def round_robin_buckets(
         {
             calendar_year_for_period(event.event_year, period)
             for event in events
-            for period in ("PRE", "EVENT", "POST")
+            for period in TARGET_PERIODS
         }
     )
     buckets: list[tuple[int, str, list[tuple[SampleEvent, str]]]] = []
@@ -460,24 +680,42 @@ def execute_sentinel_batch(
         )
         reviews = reviews_by_download(db, (download.download_id for download in downloads))
         existing_by_scene = {download.scene_id: download for download in downloads}
-        selected_dates: list[datetime] = []
-        valid_ids: set[str] = set()
-        qc_ids = {download.download_id for download in downloads if passed_local_qc(download)}
-        for download in sorted(downloads, key=download_sort_key):
-            dt = download_datetime(download)
-            if download_is_valid(download, reviews.get(download.download_id), options.local_cloud_threshold):
-                if date_gap_ok(dt, selected_dates, options.min_days):
-                    valid_ids.add(download.download_id)
-                    if dt is not None:
-                        selected_dates.append(dt)
+        state = build_quota_state(downloads, reviews, events, options)
+        all_keys = set(target_keys(events, options))
+        if selected_operation_keys is None:
+            active_keys = all_keys
+        else:
+            active_keys = {
+                key
+                for key in all_keys
+                if operation_key(key[0], key[1], key[2]) in selected_operation_keys
+            }
+        if not active_keys:
+            report_rows.append(
+                {"sample_id": sample.sample_id, "action": "skip_no_selected_operations"}
+            )
+            continue
 
-        if len(valid_ids) >= options.target_valid:
+        def incomplete_keys() -> list[TargetKey]:
+            return [key for key in active_keys if not target_is_full(state, key)]
+
+        def all_remaining_targets_blocked() -> bool:
+            remaining = incomplete_keys()
+            return bool(remaining) and all(target_qc_cap_reached(state, key) for key in remaining)
+
+        if not incomplete_keys():
+            valid_slots, target_slot_count = target_slots(state, active_keys)
+            active_event_ids = {key[0] for key in active_keys}
+            active_events = [event for event in events if event.event_id in active_event_ids]
+            qc_checked, qc_cap = qc_slots(state, active_events, options)
             report_rows.append(
                 {
                     "sample_id": sample.sample_id,
                     "action": "skip_target_reached",
-                    "valid": len(valid_ids),
-                    "qc_checked": len(qc_ids),
+                    "valid": valid_slots,
+                    "target": target_slot_count,
+                    "qc_checked": qc_checked,
+                    "qc_cap": qc_cap,
                 }
             )
             continue
@@ -490,12 +728,21 @@ def execute_sentinel_batch(
             if should_cancel and should_cancel():
                 stop_reason = "cancelled"
                 break
-            if len(valid_ids) >= options.target_valid:
+            if not incomplete_keys():
                 stop_reason = "target_reached"
                 break
-            if len(qc_ids) >= options.max_qc_scenes:
+            if all_remaining_targets_blocked():
                 stop_reason = "qc_cap_reached"
                 break
+
+            needed_relations = [
+                (event, period)
+                for event, period in relations
+                if not target_is_full(state, target_key(event, period, season))
+                and not target_qc_cap_reached(state, target_key(event, period, season))
+            ]
+            if not needed_relations:
+                continue
 
             start_mmdd, end_mmdd = SEASON_PRESETS[season]
             search_period = SearchPeriod("WINDOW", calendar_year, start_mmdd, end_mmdd)
@@ -540,7 +787,13 @@ def execute_sentinel_batch(
                 continue
 
             for rank, item in enumerate(ranked, start=1):
-                if len(valid_ids) >= options.target_valid or len(qc_ids) >= options.max_qc_scenes:
+                needed_relations = [
+                    (event, period)
+                    for event, period in relations
+                    if not target_is_full(state, target_key(event, period, season))
+                    and not target_qc_cap_reached(state, target_key(event, period, season))
+                ]
+                if not needed_relations:
                     break
                 if should_cancel and should_cancel():
                     stop_reason = "cancelled"
@@ -568,19 +821,22 @@ def execute_sentinel_batch(
                                 max_cloud=options.stac_max_cloud,
                             )
                             ensure_cloud_review(db, existing, options.local_cloud_threshold)
-                            qc_ids.add(existing.download_id)
-                            review = db.scalar(
-                                select(SentinelSceneReview).where(
-                                    SentinelSceneReview.download_id == existing.download_id
-                                )
+                        if passed_local_qc(existing):
+                            record_qc_download(state, existing, season, relations)
+                        review = db.scalar(
+                            select(SentinelSceneReview).where(
+                                SentinelSceneReview.download_id == existing.download_id
                             )
-                            if (
-                                download_is_valid(existing, review, options.local_cloud_threshold)
-                                and date_gap_ok(dt, selected_dates, options.min_days)
-                            ):
-                                valid_ids.add(existing.download_id)
-                                if dt is not None:
-                                    selected_dates.append(dt)
+                        )
+                        if download_is_valid(existing, review, options.local_cloud_threshold):
+                            record_valid_download(
+                                state,
+                                existing,
+                                dt,
+                                season,
+                                relations,
+                                options,
+                            )
                         link_download(db, existing, relations, rank)
                         db.commit()
                         if existing.download_id not in seen_bundle_ids:
@@ -613,7 +869,16 @@ def execute_sentinel_batch(
                 if scene_id in seen_scene_ids:
                     continue
                 seen_scene_ids.add(scene_id)
-                if not date_gap_ok(dt, selected_dates, options.min_days):
+                spacing_relations = [
+                    (event, period)
+                    for event, period in needed_relations
+                    if date_gap_ok(
+                        dt,
+                        state["dates_by_relation"][relation_key(event, period)],
+                        options.min_days,
+                    )
+                ]
+                if not spacing_relations:
                     report_rows.append(
                         {
                             "sample_id": sample.sample_id,
@@ -675,17 +940,25 @@ def execute_sentinel_batch(
                     )
                     continue
                 existing_by_scene[scene_id] = download
-                qc_ids.add(download.download_id)
+                record_qc_download(state, download, season, spacing_relations)
                 review = db.scalar(
                     select(SentinelSceneReview).where(
                         SentinelSceneReview.download_id == download.download_id
                     )
                 )
                 valid = download_is_valid(download, review, options.local_cloud_threshold)
-                if valid and date_gap_ok(dt, selected_dates, options.min_days):
-                    valid_ids.add(download.download_id)
-                    if dt is not None:
-                        selected_dates.append(dt)
+                accepted_targets = (
+                    record_valid_download(
+                        state,
+                        download,
+                        dt,
+                        season,
+                        spacing_relations,
+                        options,
+                    )
+                    if valid
+                    else []
+                )
                 if download.download_id not in seen_bundle_ids:
                     seen_bundle_ids.add(download.download_id)
                     bundle_download_ids.append(download.download_id)
@@ -698,24 +971,41 @@ def execute_sentinel_batch(
                         "season": season,
                         "periods": ",".join(sorted({period for _, period in relations})),
                         "cloud_fraction": download.cloud_fraction,
+                        "snow_fraction": download.snow_fraction,
+                        "accepted_targets": ",".join(
+                            f"{event_id}:{period}:{target_season}"
+                            for event_id, period, target_season in accepted_targets
+                        ),
                         "action": "downloaded_valid" if valid else "downloaded_excluded",
                     }
                 )
 
+        remaining = incomplete_keys()
+        if stop_reason != "cancelled":
+            if not remaining:
+                stop_reason = "target_reached"
+            elif all(target_qc_cap_reached(state, key) for key in remaining):
+                stop_reason = "qc_cap_reached"
+        valid_slots, target_slot_count = target_slots(state, active_keys)
+        active_event_ids = {key[0] for key in active_keys}
+        active_events = [event for event in events if event.event_id in active_event_ids]
+        qc_checked, qc_cap = qc_slots(state, active_events, options)
         report_rows.append(
             {
                 "sample_id": sample.sample_id,
                 "action": "sample_done",
-                "valid": len(valid_ids),
-                "qc_checked": len(qc_ids),
+                "valid": valid_slots,
+                "target": target_slot_count,
+                "qc_checked": qc_checked,
+                "qc_cap": qc_cap,
                 "stop_reason": stop_reason,
             }
         )
         if progress:
             progress(
                 "sample_done",
-                f"{sample.sample_id[:8]}: {len(valid_ids)}/{options.target_valid} valid, "
-                f"{len(qc_ids)}/{options.max_qc_scenes} checked",
+                f"{sample.sample_id[:8]}: {valid_slots}/{target_slot_count} valid slots, "
+                f"{qc_checked}/{qc_cap} event-season QC slots",
                 sample_index,
                 total,
             )
@@ -766,6 +1056,7 @@ def execute_sentinel_batch(
                 "sample_id": download.sample_id,
                 "scene_id": download.scene_id,
                 "cloud_fraction": download.cloud_fraction,
+                "snow_fraction": download.snow_fraction,
                 "is_bad_quality": bool(download.is_bad_quality),
                 "is_excluded": bool(
                     selected_reviews.get(download.download_id)
@@ -787,8 +1078,11 @@ def execute_sentinel_batch(
         "options": {
             "mode": options.mode,
             "seasons": list(options.seasons),
+            "target_periods": list(TARGET_PERIODS),
             "target_valid": options.target_valid,
             "max_qc_scenes": options.max_qc_scenes,
+            "season_valid_targets": season_valid_targets(options),
+            "season_qc_caps": season_qc_caps(options),
         },
     }
     selection_path.write_text(json.dumps(selection, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -800,8 +1094,11 @@ def execute_sentinel_batch(
         "options": {
             "mode": options.mode,
             "seasons": list(options.seasons),
+            "target_periods": list(TARGET_PERIODS),
             "target_valid": options.target_valid,
             "max_qc_scenes": options.max_qc_scenes,
+            "season_valid_targets": season_valid_targets(options),
+            "season_qc_caps": season_qc_caps(options),
             "min_days": options.min_days,
             "stac_max_cloud": options.stac_max_cloud,
             "local_cloud_threshold": options.local_cloud_threshold,

@@ -40,14 +40,19 @@ from .hansen_service import (
     cache_url,
     loss_year_legend,
     pixel_area_ha,
+    rgba_binary,
     rgba_loss_year,
+    status_for_loss,
     write_png,
+    write_raster,
 )
 from .models import (
+    HansenAnalysis,
     HansenCandidate,
     HansenCandidateExclusion,
     HansenCandidateRun,
     HansenCandidateRunItem,
+    HansenMask,
     HansenTile,
     Sample,
     SampleAssignment,
@@ -65,6 +70,8 @@ MULTIPLE_EVENT_MIN_COUNT = 3
 THRESHOLD_SWEEP = (0.5, 1.0, 2.5, 5.0, 10.0)
 RUN_DECISIONS = {"ELIGIBLE", "SELECTED", "USER_REJECTED", "REJECTED"}
 CANDIDATE_PREVIEW_SCHEMA_VERSION = 1
+CANDIDATE_MASK_ANALYSIS_AREA_TYPE = "candidate_aoi"
+CANDIDATE_MASK_TYPES = {"aoi_all_loss", "aoi_dominant_year"}
 
 ProgressCallback = Callable[[str, str, int, int], None]
 CancelCallback = Callable[[], bool]
@@ -827,6 +834,7 @@ def candidate_run_payload(db: Session, run_id: str) -> dict[str, Any]:
             "tile_inventory_csv": to_storage_path(artifact_dir / "tile_inventory.csv"),
             "summary_json": to_storage_path(artifact_dir / "summary.json"),
         }
+    mask_status = candidate_mask_run_status(db, run_id)
     return {
         "run_id": run.run_id,
         "algorithm_name": run.algorithm_name,
@@ -836,6 +844,7 @@ def candidate_run_payload(db: Session, run_id: str) -> dict[str, Any]:
         "target_count": run.target_count,
         "selected_count": run.selected_count,
         "created_sample_count": run.created_sample_count,
+        "hansen_masks": mask_status,
         "config": _json_value(run.config_json, {}),
         "summary": _json_value(run.summary_json, {}),
         "artifact_path": run.artifact_path,
@@ -902,6 +911,60 @@ def _candidate_lossyear_sources(
     return sources
 
 
+def _candidate_lossyear_raster(
+    candidate: HansenCandidate,
+    source_rows: list[tuple[str, Path]],
+    *,
+    min_event_year: int,
+) -> tuple[np.ndarray, dict[str, Any], list[float]]:
+    geometry_payload = sample_geometries(
+        candidate.lon,
+        candidate.lat,
+        viewer_aoi_m=candidate.aoi_size_m,
+    )
+    geometry = geometry_payload["viewer_aoi"]
+    requested_bbox = geometry_payload["viewer_aoi_bbox"]
+    with ExitStack() as stack:
+        datasets = [stack.enter_context(rasterio.open(path)) for _tile_id, path in source_rows]
+        crs_values = {str(dataset.crs).upper() for dataset in datasets if dataset.crs}
+        if crs_values not in ({"EPSG:4326"}, {"OGC:CRS84"}):
+            raise ValueError(
+                "Candidate Hansen masks expect all source tiles in EPSG:4326/CRS84."
+            )
+        source_profile = datasets[0].profile.copy()
+        mosaic, transform = rio_merge(
+            datasets,
+            bounds=tuple(float(value) for value in requested_bbox),
+            nodata=0,
+            dtype="uint8",
+            resampling=Resampling.nearest,
+        )
+    loss = mosaic[0].astype(np.uint8, copy=False)
+    inside = geometry_mask(
+        [geometry],
+        out_shape=loss.shape,
+        transform=transform,
+        invert=True,
+    )
+    loss = np.where(inside, loss, 0).astype(np.uint8, copy=False)
+    recent = (
+        (loss > 0)
+        & (loss <= HANSEN_MAX_LOSS_CODE)
+        & ((loss.astype(np.int16) + 2000) >= min_event_year)
+    )
+    loss = np.where(recent, loss, 0).astype(np.uint8, copy=False)
+    bbox = [float(value) for value in array_bounds(loss.shape[0], loss.shape[1], transform)]
+    source_profile.update(
+        transform=transform,
+        width=loss.shape[1],
+        height=loss.shape[0],
+        count=1,
+        dtype="uint8",
+        nodata=0,
+    )
+    return loss, source_profile, bbox
+
+
 def candidate_hansen_preview_payload(
     db: Session,
     candidate_id: str,
@@ -916,7 +979,6 @@ def candidate_hansen_preview_payload(
         candidate.lat,
         viewer_aoi_m=candidate.aoi_size_m,
     )
-    geometry = geometry_payload["viewer_aoi"]
     requested_bbox = geometry_payload["viewer_aoi_bbox"]
     metadata = _json_value(candidate.metadata_json, {})
     min_event_year = int(metadata.get("min_event_year") or MIN_EVENT_YEAR)
@@ -955,35 +1017,11 @@ def candidate_hansen_preview_payload(
             preview_metadata = None
 
     if preview_metadata is None:
-        with ExitStack() as stack:
-            datasets = [stack.enter_context(rasterio.open(path)) for _tile_id, path in source_rows]
-            crs_values = {str(dataset.crs).upper() for dataset in datasets if dataset.crs}
-            if crs_values not in ({"EPSG:4326"}, {"OGC:CRS84"}):
-                raise ValueError(
-                    "Candidate Hansen preview expects all source tiles in EPSG:4326/CRS84."
-                )
-            mosaic, transform = rio_merge(
-                datasets,
-                bounds=tuple(float(value) for value in requested_bbox),
-                nodata=0,
-                dtype="uint8",
-                resampling=Resampling.nearest,
-            )
-        loss = mosaic[0].astype(np.uint8, copy=False)
-        inside = geometry_mask(
-            [geometry],
-            out_shape=loss.shape,
-            transform=transform,
-            invert=True,
+        loss, _profile, bbox = _candidate_lossyear_raster(
+            candidate,
+            source_rows,
+            min_event_year=min_event_year,
         )
-        loss = np.where(inside, loss, 0).astype(np.uint8, copy=False)
-        recent = (
-            (loss > 0)
-            & (loss <= HANSEN_MAX_LOSS_CODE)
-            & ((loss.astype(np.int16) + 2000) >= min_event_year)
-        )
-        loss = np.where(recent, loss, 0).astype(np.uint8, copy=False)
-        bbox = array_bounds(loss.shape[0], loss.shape[1], transform)
 
         preview_dir.mkdir(parents=True, exist_ok=True)
         temporary_png = png_path.with_name(f".{png_path.stem}.{uuid.uuid4().hex}.tmp.png")
@@ -1020,6 +1058,281 @@ def candidate_hansen_preview_payload(
         "dimensions": preview_metadata["dimensions"],
         "cache_hit": cache_hit,
     }
+
+
+def _candidate_mask_ready_sample_ids(
+    db: Session,
+    sample_ids: list[str],
+) -> set[str]:
+    if not sample_ids:
+        return set()
+    analyses = list(
+        db.scalars(
+            select(HansenAnalysis)
+            .where(
+                HansenAnalysis.sample_id.in_(sample_ids),
+                HansenAnalysis.analysis_area_type == CANDIDATE_MASK_ANALYSIS_AREA_TYPE,
+            )
+            .order_by(
+                HansenAnalysis.sample_id,
+                HansenAnalysis.created_at.desc(),
+                HansenAnalysis.analysis_id.desc(),
+            )
+        )
+    )
+    latest_by_sample: dict[str, HansenAnalysis] = {}
+    for analysis in analyses:
+        latest_by_sample.setdefault(analysis.sample_id, analysis)
+    analysis_ids = [analysis.analysis_id for analysis in latest_by_sample.values()]
+    masks = list(
+        db.scalars(select(HansenMask).where(HansenMask.analysis_id.in_(analysis_ids)))
+    ) if analysis_ids else []
+    masks_by_analysis: dict[str, dict[str, HansenMask]] = defaultdict(dict)
+    for mask in masks:
+        masks_by_analysis[mask.analysis_id][mask.mask_type] = mask
+
+    ready: set[str] = set()
+    for sample_id, analysis in latest_by_sample.items():
+        by_type = masks_by_analysis.get(analysis.analysis_id, {})
+        if not CANDIDATE_MASK_TYPES.issubset(by_type):
+            continue
+        files_ready = True
+        for mask_type in CANDIDATE_MASK_TYPES:
+            tif_path = resolve_storage_path(by_type[mask_type].local_path)
+            if not tif_path.exists() or not tif_path.with_suffix(".png").exists():
+                files_ready = False
+                break
+        if files_ready:
+            ready.add(sample_id)
+    return ready
+
+
+def candidate_mask_run_status(db: Session, run_id: str) -> dict[str, int]:
+    candidates = list(
+        db.scalars(
+            select(HansenCandidate)
+            .join(
+                HansenCandidateRunItem,
+                HansenCandidateRunItem.candidate_id == HansenCandidate.candidate_id,
+            )
+            .where(
+                HansenCandidateRunItem.run_id == run_id,
+                HansenCandidate.created_sample_id.is_not(None),
+            )
+        )
+    )
+    sample_ids = [
+        candidate.created_sample_id
+        for candidate in candidates
+        if candidate.created_sample_id is not None
+    ]
+    ready = _candidate_mask_ready_sample_ids(db, sample_ids)
+    return {
+        "materialized": len(sample_ids),
+        "ready": len(ready),
+        "pending": len(sample_ids) - len(ready),
+    }
+
+
+def _write_candidate_masks(
+    db: Session,
+    candidate: HansenCandidate,
+) -> HansenAnalysis:
+    if not candidate.created_sample_id:
+        raise ValueError(f"Candidate is not materialized: {candidate.candidate_id}")
+    sample = db.get(Sample, candidate.created_sample_id)
+    if sample is None:
+        raise ValueError(f"Materialized sample is missing: {candidate.created_sample_id}")
+
+    metadata = _json_value(candidate.metadata_json, {})
+    min_event_year = int(metadata.get("min_event_year") or MIN_EVENT_YEAR)
+    source_rows = _candidate_lossyear_sources(db, candidate)
+    loss, profile, bbox = _candidate_lossyear_raster(
+        candidate,
+        source_rows,
+        min_event_year=min_event_year,
+    )
+    histogram = metadata.get("histogram") or []
+    if not histogram:
+        area_ha = pixel_area_ha(profile["transform"], profile.get("crs"), candidate.lat)
+        codes, counts = np.unique(
+            loss[(loss > 0) & (loss <= HANSEN_MAX_LOSS_CODE)],
+            return_counts=True,
+        )
+        histogram = [
+            {
+                "year": 2000 + int(code),
+                "pixels": int(count),
+                "loss_area_ha": round(float(count) * area_ha, 4),
+            }
+            for code, count in zip(codes.tolist(), counts.tolist(), strict=True)
+        ]
+
+    status = status_for_loss(
+        float(candidate.total_loss_area_ha),
+        float(candidate.dominant_loss_area_ha),
+        float(candidate.dominant_loss_fraction),
+    )
+    analysis = HansenAnalysis(
+        analysis_id=uuid.uuid4().hex,
+        sample_id=sample.sample_id,
+        analysis_area_type=CANDIDATE_MASK_ANALYSIS_AREA_TYPE,
+        plot_size_m=float(candidate.aoi_size_m),
+        treecover_threshold=None,
+        event_year=int(candidate.primary_event_year),
+        total_loss_area_ha=float(candidate.total_loss_area_ha),
+        dominant_loss_area_ha=float(candidate.dominant_loss_area_ha),
+        dominant_year_share=float(candidate.dominant_loss_fraction),
+        status=status,
+        histogram_json=_json(histogram),
+    )
+    db.add(analysis)
+
+    dominant_code = int(candidate.primary_event_year) - 2000
+    dominant = loss == dominant_code
+    mask_dir = FOREST_HANSEN_CACHE_DIR / "masks" / sample.sample_id / analysis.analysis_id
+    mask_specs = (
+        ("aoi_all_loss", loss, rgba_loss_year(loss)),
+        ("aoi_dominant_year", dominant.astype(np.uint8), rgba_binary(dominant, (220, 70, 45))),
+    )
+    for mask_type, raster_data, png_data in mask_specs:
+        tif_path = mask_dir / f"{mask_type}.tif"
+        write_raster(tif_path, raster_data, profile)
+        write_png(tif_path.with_suffix(".png"), png_data)
+        db.add(
+            HansenMask(
+                mask_id=uuid.uuid4().hex,
+                sample_id=sample.sample_id,
+                analysis_id=analysis.analysis_id,
+                mask_type=mask_type,
+                local_path=to_storage_path(tif_path) or str(tif_path),
+                bbox_json=_json(bbox),
+            )
+        )
+    return analysis
+
+
+def generate_candidate_masks_for_run(
+    db: Session,
+    run_id: str,
+    *,
+    execution_id: str | None = None,
+    progress: ProgressCallback | None = None,
+    should_cancel: CancelCallback | None = None,
+) -> dict[str, Any]:
+    run = db.get(HansenCandidateRun, run_id)
+    if run is None:
+        raise ValueError(f"Mining run not found: {run_id}")
+    candidates = list(
+        db.scalars(
+            select(HansenCandidate)
+            .join(
+                HansenCandidateRunItem,
+                HansenCandidateRunItem.candidate_id == HansenCandidate.candidate_id,
+            )
+            .where(
+                HansenCandidateRunItem.run_id == run_id,
+                HansenCandidate.created_sample_id.is_not(None),
+            )
+            .order_by(HansenCandidate.primary_event_year, HansenCandidate.candidate_id)
+        )
+    )
+    if not candidates:
+        raise ValueError("Mining run has no materialized candidates")
+
+    sample_ids = [
+        candidate.created_sample_id
+        for candidate in candidates
+        if candidate.created_sample_id is not None
+    ]
+    ready_ids = _candidate_mask_ready_sample_ids(db, sample_ids)
+    report_rows: list[dict[str, Any]] = []
+    created = 0
+    reused = 0
+    failed = 0
+    cancelled = False
+    total = len(candidates)
+    for index, candidate in enumerate(candidates, start=1):
+        if should_cancel and should_cancel():
+            cancelled = True
+            break
+        sample_id = candidate.created_sample_id or ""
+        if progress:
+            progress(
+                "candidate_masks",
+                f"Hansen AOI masks {index}/{total}: {sample_id[:8]}",
+                index - 1,
+                total,
+            )
+        if sample_id in ready_ids:
+            reused += 1
+            report_rows.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "sample_id": sample_id,
+                    "status": "reused",
+                    "error": "",
+                }
+            )
+        else:
+            try:
+                analysis = _write_candidate_masks(db, candidate)
+                db.commit()
+                created += 1
+                report_rows.append(
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "sample_id": sample_id,
+                        "analysis_id": analysis.analysis_id,
+                        "status": "created",
+                        "error": "",
+                    }
+                )
+            except Exception as exc:
+                db.rollback()
+                failed += 1
+                report_rows.append(
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "sample_id": sample_id,
+                        "status": "failed",
+                        "error": str(exc)[:500],
+                    }
+                )
+        if progress:
+            progress(
+                "candidate_masks",
+                f"Hansen AOI masks: {index}/{total}; failed {failed}",
+                index,
+                total,
+            )
+
+    artifact_id = execution_id or uuid.uuid4().hex
+    artifact_dir = FOREST_EXPORTS_DIR / "hansen_candidate_masks" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = artifact_dir / "mask_generation.csv"
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        fieldnames = ["candidate_id", "sample_id", "analysis_id", "status", "error"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(report_rows)
+    summary = {
+        "run_id": run_id,
+        "status": "CANCELLED" if cancelled else "COMPLETED_WITH_ERRORS" if failed else "COMPLETED",
+        "total": total,
+        "processed": created + reused + failed,
+        "created": created,
+        "reused": reused,
+        "failed": failed,
+        "events_modified": 0,
+        "reviews_modified": 0,
+        "sentinel_links_modified": 0,
+        "csv_path": to_storage_path(csv_path) or str(csv_path),
+    }
+    summary_path = artifact_dir / "summary.json"
+    summary["summary_json"] = to_storage_path(summary_path) or str(summary_path)
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
 
 
 def list_candidate_runs(db: Session, limit: int = 25) -> list[dict[str, Any]]:

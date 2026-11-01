@@ -13,6 +13,7 @@ import {
   planSentinelBundle,
   startBundleImport,
   startEventBackfill,
+  startHansenCandidateMasks,
   startHansenCandidateMining,
   startMissingGeotiffInventory,
   startModelLabeling,
@@ -20,8 +21,8 @@ import {
   startSentinelBundle,
   rejectHansenCandidates,
   uploadDataOperationSourceFile,
-} from "./samples.js?v=model-labeling-inference-3";
-import { forestState } from "./state.js?v=model-labeling-inference-3";
+} from "./samples.js?v=candidate-hansen-masks-2";
+import { forestState } from "./state.js?v=candidate-hansen-masks-2";
 
 
 let dataOperationsCallbacks = null;
@@ -397,6 +398,7 @@ function renderMiningPlan() {
     $("forestDataOperationsMiningRejectBtn").disabled = true;
     $("forestDataOperationsMiningFillBtn").disabled = true;
     $("forestDataOperationsMiningApplyBtn").disabled = true;
+    $("forestDataOperationsMiningMasksBtn").disabled = true;
     renderMiningMap();
     return;
   }
@@ -415,6 +417,8 @@ function renderMiningPlan() {
     selected: run.selected_count,
     reserve: run.summary?.reserve_count || 0,
     created: run.created_sample_count,
+    masks_ready: run.hansen_masks?.ready || 0,
+    masks_pending: run.hansen_masks?.pending || 0,
     tiles: run.summary?.valid_tiles || 0,
     "sweep 0.5/1/2.5/5/10": [0.5, 1, 2.5, 5, 10].map((key) => sweep[String(key)] || 0).join(" / "),
   });
@@ -476,6 +480,9 @@ function renderMiningPlan() {
     || run.selected_count >= run.target_count
     || Number(run.summary?.reserve_count || 0) <= 0;
   $("forestDataOperationsMiningApplyBtn").disabled = running || !selected.length;
+  $("forestDataOperationsMiningMasksBtn").disabled = running
+    || Number(run.hansen_masks?.materialized || 0) === 0
+    || Number(run.hansen_masks?.pending || 0) === 0;
   renderMiningMap();
 }
 
@@ -512,6 +519,8 @@ function renderLabelingPlan() {
     events: plan.summary.events,
     ready_inputs: plan.summary.ready_inputs,
     incomplete_inputs: plan.summary.incomplete_inputs,
+    xgboost_ready: plan.summary.xgboost_ready_inputs,
+    xgboost_no_spectral: plan.summary.xgboost_spectral_incomplete_inputs,
     remoteclip: plan.summary.remoteclip_artifact_ready ? "ready" : "missing",
     xgboost: plan.summary.xgboost_artifact_ready ? "ready" : "missing",
   });
@@ -527,13 +536,16 @@ function renderLabelingPlan() {
     const confidence = prediction.confidence === null || prediction.confidence === undefined
       ? "n/a"
       : Number(prediction.confidence).toFixed(3);
-    return `${prediction.source_name} ${prediction.label} ${confidence} (${prediction.source_version})`;
+    const stale = prediction.stale_for_current_input
+      ? ` [stale: ${prediction.current_input_status}]`
+      : "";
+    return `${prediction.source_name} ${prediction.label} ${confidence} (${prediction.source_version})${stale}`;
   }).join("; ");
   const eventRows = (plan.events || []).map((event) => `
     <article class="forestDataOperationsRow ${event.input_status === "READY" ? "" : "warning"}">
       <span></span>
       <span><strong>${escapeHtml(event.event_year)} · ${escapeHtml(event.sample_id.slice(0, 8))}</strong><span>${escapeHtml(event.event_id.slice(0, 8))}</span></span>
-      <span><strong>PRE ${event.usable_counts.PRE || 0} · POST ${event.usable_counts.POST || 0}</strong><span>${escapeHtml(predictionSummary(event) || event.blockers.join(", ") || "inputs ready")}</span></span>
+      <span><strong>PRE ${event.usable_counts.PRE || 0} · POST ${event.usable_counts.POST || 0}</strong><span>${escapeHtml(predictionSummary(event) || event.blockers.join(", ") || "inputs ready")}</span><span>XGB spectral PRE ${event.spectral_usable_counts?.PRE || 0} · POST ${event.spectral_usable_counts?.POST || 0}${event.xgboost_input_status === "READY" ? "" : ` · ${event.xgboost_input_status}`}</span></span>
       <span class="forestDataOperationsBadge">${escapeHtml(
         (event.existing_predictions || []).length
           ? `${event.existing_predictions.length} prediction(s)`
@@ -550,6 +562,7 @@ function renderLabelingPlan() {
 function activeJobHost() {
   const kind = forestState.dataOperationsJob?.kind || "";
   if (kind === "hansen_candidate_mining") return $("forestDataOperationsMiningJob");
+  if (kind === "hansen_candidate_masks") return $("forestDataOperationsMiningJob");
   if (kind === "model_labeling") return $("forestDataOperationsLabelingJob");
   if (kind === "sentinel_bundle_export") return $("forestDataOperationsBundleJob");
   if (kind === "sentinel_bundle_import") return $("forestDataOperationsImportJob");
@@ -654,19 +667,21 @@ function renderDownloadPlan() {
   totals.textContent = `${forestState.dataOperationsSelectedKeys.size}/${rows.length} operations selected`;
   const plannedHtml = rows.map(({ sample, operation }) => {
     const selected = forestState.dataOperationsSelectedKeys.has(operation.operation_key);
-    const warning = sample.stop_reason ? " warning" : "";
+    const stopped = sample.stop_reason || operation.stop_reason;
+    const warning = stopped ? " warning" : "";
     return `
       <label class="forestDataOperationsRow${warning}">
-        <input type="checkbox" data-data-operations-key="${escapeHtml(operation.operation_key)}" ${selected ? "checked" : ""} ${sample.stop_reason ? "disabled" : ""} />
+        <input type="checkbox" data-data-operations-key="${escapeHtml(operation.operation_key)}" ${selected ? "checked" : ""} ${stopped ? "disabled" : ""} />
         <span>
           <strong>${escapeHtml(sample.display_name)}</strong>
           <span>${escapeHtml(sample.short_id)} / ${escapeHtml(sample.driver || "unknown")}</span>
         </span>
         <span>
           <strong>${escapeHtml(operation.event_year)}${operation.is_dominant ? " / dominant" : ""} / ${escapeHtml(operation.period)} / ${escapeHtml(operation.season)}</strong>
-          <span>${escapeHtml(operation.start)} .. ${escapeHtml(operation.end)} / QC ${escapeHtml(sample.qc_checked_count)}/${escapeHtml(sample.max_qc_scenes)} / deficit ${escapeHtml(sample.deficit)}</span>
+          <span>${escapeHtml(operation.start)} .. ${escapeHtml(operation.end)} / season QC ${escapeHtml(operation.qc_checked_count)}/${escapeHtml(operation.max_qc_scenes)} / season deficit ${escapeHtml(operation.deficit)}</span>
+          <span>sample slots ${escapeHtml(sample.valid_count)}/${escapeHtml(sample.target_valid)} / event QC slots ${escapeHtml(sample.qc_checked_count)}/${escapeHtml(sample.max_qc_scenes)}</span>
         </span>
-        <span class="forestDataOperationsBadge">${escapeHtml(sample.valid_count)}/${escapeHtml(sample.target_valid)} valid</span>
+        <span class="forestDataOperationsBadge">${escapeHtml(operation.valid_count)}/${escapeHtml(operation.target_valid)} valid</span>
       </label>
     `;
   }).join("");
@@ -690,8 +705,9 @@ function renderDownloadPlan() {
       renderJob();
     });
   });
-  $("forestDataOperationsDownloadSelectAll").checked = Boolean(rows.length)
-    && rows.filter(({ sample }) => !sample.stop_reason).every(({ operation }) => (
+  const actionableRows = rows.filter(({ sample, operation }) => !sample.stop_reason && !operation.stop_reason);
+  $("forestDataOperationsDownloadSelectAll").checked = Boolean(actionableRows.length)
+    && actionableRows.every(({ operation }) => (
       forestState.dataOperationsSelectedKeys.has(operation.operation_key)
     ));
   $("forestDataOperationsDownloadStartBtn").disabled = dataOperationsRunning()
@@ -876,6 +892,10 @@ async function pollJob(callbacks) {
     );
     await loadMiningRuns();
   }
+  if (job.kind === "hansen_candidate_masks") {
+    await loadMiningRuns();
+    await callbacks.refreshForestData();
+  }
   if (["sample_event_backfill", "sentinel_batch_download", "sentinel_bundle_import"].includes(job.kind)) {
     await callbacks.refreshForestData();
   }
@@ -1013,7 +1033,20 @@ export function initDataOperations(callbacks) {
     $("forestDataOperationsDownloadMode").value = "hansen_mining_run";
     $("forestDataOperationsDownloadMiningRun").value = run.run_id;
     await callbacks.refreshForestData();
-    setStatus(`Created ${result.created} sample(s); ${result.existing} already existed`);
+    setStatus(
+      `Created ${result.created} sample(s); ${result.existing} already existed; `
+      + `${result.run.hansen_masks?.pending || 0} Hansen mask set(s) pending`,
+    );
+  }));
+  $("forestDataOperationsMiningMasksBtn").addEventListener("click", () => callbacks.run(async () => {
+    const run = forestState.dataOperationsMiningRun;
+    if (!run) throw new Error("Build or select a mining run first.");
+    if (!Number(run.hansen_masks?.pending || 0)) {
+      throw new Error("All materialized samples in this run already have Hansen AOI masks.");
+    }
+    setStatus("starting Hansen AOI mask generation");
+    const job = await startHansenCandidateMasks(run.run_id);
+    watchJob(job, callbacks);
   }));
   $("forestDataOperationsLabelingRun").addEventListener("change", () => {
     forestState.dataOperationsLabelingPlan = null;
@@ -1088,7 +1121,9 @@ export function initDataOperations(callbacks) {
     forestState.dataOperationsPlan = plan;
     forestState.dataOperationsSelectedKeys = new Set(
       plan.samples.flatMap((sample) => (
-        sample.stop_reason ? [] : sample.operations.map((operation) => operation.operation_key)
+        sample.stop_reason
+          ? []
+          : sample.operations.filter((operation) => !operation.stop_reason).map((operation) => operation.operation_key)
       )),
     );
     renderDownloadPlan();
@@ -1098,7 +1133,11 @@ export function initDataOperations(callbacks) {
     const plan = forestState.dataOperationsPlan;
     if (!plan) return;
     forestState.dataOperationsSelectedKeys = event.target.checked
-      ? new Set(plan.samples.flatMap((sample) => sample.stop_reason ? [] : sample.operations.map((row) => row.operation_key)))
+      ? new Set(plan.samples.flatMap((sample) => (
+        sample.stop_reason
+          ? []
+          : sample.operations.filter((row) => !row.stop_reason).map((row) => row.operation_key)
+      )))
       : new Set();
     renderDownloadPlan();
     renderJob();

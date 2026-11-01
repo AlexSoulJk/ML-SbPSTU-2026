@@ -20,6 +20,7 @@ from .candidate_service import (
     candidate_hansen_preview_payload,
     candidate_run_payload,
     fill_candidate_run,
+    generate_candidate_masks_for_run,
     list_candidate_runs,
     materialize_candidates,
     mine_hansen_candidates,
@@ -792,6 +793,67 @@ def run_hansen_candidate_mining_job(
         db.close()
 
 
+def run_hansen_candidate_masks_job(job_id: str, run_id: str) -> None:
+    db = SessionLocal()
+
+    def progress(stage: str, message: str, done: int, total: int) -> None:
+        jobs.update(
+            job_id,
+            status="running",
+            stage=stage,
+            done=done,
+            total=total,
+            message=message,
+        )
+
+    try:
+        jobs.update(
+            job_id,
+            status="running",
+            stage="candidate_masks",
+            message="Preparing Hansen AOI masks for materialized candidates",
+        )
+        result = generate_candidate_masks_for_run(
+            db,
+            run_id,
+            execution_id=job_id,
+            progress=progress,
+            should_cancel=lambda: job_cancel_requested(job_id),
+        )
+        cancelled = job_cancel_requested(job_id) or result["status"] == "CANCELLED"
+        failed = int(result.get("failed") or 0)
+        skipped_input = int(result.get("skipped_input") or 0)
+        jobs.update(
+            job_id,
+            status=(
+                "cancelled"
+                if cancelled
+                else "completed_with_errors"
+                if failed or skipped_input
+                else "completed"
+            ),
+            stage="cancelled" if cancelled else "done",
+            done=int(result.get("processed") or 0),
+            total=int(result.get("total") or 0),
+            message=(
+                f"Hansen AOI masks: {result.get('created', 0)} created, "
+                f"{result.get('reused', 0)} reused, {failed} failed"
+            ),
+            result=result,
+        )
+    except Exception as exc:
+        db.rollback()
+        cancelled = job_cancel_requested(job_id)
+        jobs.update(
+            job_id,
+            status="cancelled" if cancelled else "failed",
+            stage="cancelled" if cancelled else "failed",
+            message=str(exc)[:500],
+        )
+    finally:
+        db.close()
+
+
 def run_event_backfill_job(job_id: str, limit: int | None) -> None:
     db = SessionLocal()
 
@@ -951,10 +1013,16 @@ def run_model_labeling_job(job_id: str, request: ModelLabelingJobRequest) -> Non
                 else "completed"
             ),
             stage="cancelled" if cancelled else "done",
-            done=int(result.get("created") or 0) + int(result.get("reused") or 0) + failed,
+            done=(
+                int(result.get("created") or 0)
+                + int(result.get("reused") or 0)
+                + failed
+                + skipped_input
+            ),
             message=(
                 f"Model labels: {result.get('created', 0)} created, "
-                f"{result.get('reused', 0)} reused, {failed} failed"
+                f"{result.get('reused', 0)} reused, "
+                f"{skipped_input} skipped input, {failed} failed"
             ),
             result=result,
         )
@@ -1736,6 +1804,30 @@ def materialize_hansen_candidate_rows(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-operations/hansen-mining/runs/{run_id}/mask-jobs")
+def start_hansen_candidate_masks_job(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.get(HansenCandidateRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Mining run was not found.")
+    if not run.created_sample_count:
+        raise HTTPException(status_code=400, detail="Mining run has no materialized samples.")
+    job = jobs.create(
+        "hansen_candidate_masks",
+        total=int(run.created_sample_count),
+        message=f"Queued Hansen AOI masks for mining run {run_id[:8]}",
+    )
+    thread = threading.Thread(
+        target=run_hansen_candidate_masks_job,
+        args=(job.job_id, run_id),
+        daemon=True,
+    )
+    thread.start()
+    return job.snapshot()
 
 
 @router.post("/data-operations/hansen-mining/exclusions/{exclusion_id}/restore")

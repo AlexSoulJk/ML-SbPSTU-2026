@@ -1,5 +1,5 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=model-labeling-inference-3";
-import { initDataOperations } from "./data_operations.js?v=model-labeling-inference-3";
+import { clearForestLayers, renderForestMap } from "./map.js?v=candidate-hansen-masks-2";
+import { initDataOperations } from "./data_operations.js?v=sentinel-balanced-quota-1";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
@@ -21,8 +21,8 @@ import {
   searchSentinel,
   startHansenBatch,
   startSentinelCacheDownload,
-} from "./samples.js?v=model-labeling-inference-3";
-import { forestState } from "./state.js?v=model-labeling-inference-3";
+} from "./samples.js?v=candidate-hansen-masks-2";
+import { forestState } from "./state.js?v=candidate-hansen-masks-2";
 
 function $(id) {
   return document.getElementById(id);

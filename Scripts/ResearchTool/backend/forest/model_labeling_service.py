@@ -11,6 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import FOREST_MODELS_DIR
+from .ml.spectral_features import (
+    missing_required_index_medians,
+    spectral_input_status,
+    stats_for_tif,
+)
 from .models import (
     DerivedPreview,
     EventLabel,
@@ -214,9 +219,12 @@ def build_model_labeling_plan(
     for link in links:
         links_by_event.setdefault(link.event_id, []).append(link)
     rows: list[dict[str, Any]] = []
+    spectral_stats_cache: dict[str, dict[str, float]] = {}
     for event in events:
         usable_by_period: dict[str, list[str]] = {"PRE": [], "EVENT": [], "POST": []}
+        spectral_usable_by_period: dict[str, list[str]] = {"PRE": [], "EVENT": [], "POST": []}
         rejected: list[dict[str, Any]] = []
+        spectral_rejected: list[dict[str, Any]] = []
         for link in links_by_event.get(event.event_id, []):
             download = downloads.get(link.download_id)
             if download is None:
@@ -229,6 +237,29 @@ def build_model_labeling_plan(
             )
             if usable:
                 usable_by_period.setdefault(link.period, []).append(download.download_id)
+                if download.download_id not in spectral_stats_cache:
+                    try:
+                        spectral_stats_cache[download.download_id] = stats_for_tif(
+                            resolve_storage_path(download.local_path)
+                        )
+                    except Exception:
+                        spectral_stats_cache[download.download_id] = {}
+                missing_spectral = missing_required_index_medians(
+                    spectral_stats_cache[download.download_id]
+                )
+                if missing_spectral:
+                    spectral_rejected.append(
+                        {
+                            "download_id": download.download_id,
+                            "period": link.period,
+                            "reasons": ["MISSING_SPECTRAL_INDICES"],
+                            "missing_features": missing_spectral,
+                        }
+                    )
+                else:
+                    spectral_usable_by_period.setdefault(link.period, []).append(
+                        download.download_id
+                    )
             else:
                 rejected.append({"download_id": download.download_id, "period": link.period, "reasons": reasons})
         blockers = []
@@ -236,6 +267,11 @@ def build_model_labeling_plan(
             blockers.append("NO_USABLE_PRE")
         if not usable_by_period["POST"]:
             blockers.append("NO_USABLE_POST")
+        xgboost_status = spectral_input_status(
+            len(spectral_usable_by_period["PRE"]),
+            len(spectral_usable_by_period["POST"]),
+        )
+        general_input_status = "READY" if not blockers else "INCOMPLETE_INPUT"
         rows.append(
             {
                 "sample_id": event.sample_id,
@@ -244,8 +280,15 @@ def build_model_labeling_plan(
                 "usable_counts": {period: len(ids) for period, ids in usable_by_period.items()},
                 "usable_download_ids": usable_by_period,
                 "rejected_downloads": rejected,
+                "spectral_usable_counts": {
+                    period: len(ids) for period, ids in spectral_usable_by_period.items()
+                },
+                "spectral_usable_download_ids": spectral_usable_by_period,
+                "spectral_rejected_downloads": spectral_rejected,
                 "blockers": blockers,
-                "input_status": "READY" if not blockers else "INCOMPLETE_INPUT",
+                "input_status": general_input_status,
+                "xgboost_input_status": xgboost_status,
+                "xgboost_blockers": [] if xgboost_status == "READY" else [xgboost_status],
                 "existing_predictions": [
                     {
                         "label_id": label.label_id,
@@ -253,6 +296,16 @@ def build_model_labeling_plan(
                         "source_version": label.source_version,
                         "label": label.label,
                         "confidence": label.confidence,
+                        "current_input_status": (
+                            xgboost_status
+                            if label.source_name == "XGBOOST"
+                            else general_input_status
+                        ),
+                        "stale_for_current_input": (
+                            xgboost_status != "READY"
+                            if label.source_name == "XGBOOST"
+                            else general_input_status != "READY"
+                        ),
                     }
                     for label in sorted(
                         latest_labels.get(event.event_id, {}).values(),
@@ -267,6 +320,13 @@ def build_model_labeling_plan(
         "XGBOOST": model_artifact_status("XGBOOST", xgboost_version),
     }
     ready_inputs = sum(row["input_status"] == "READY" for row in rows)
+    xgboost_ready_inputs = sum(
+        row["input_status"] == "READY" and row["xgboost_input_status"] == "READY"
+        for row in rows
+    )
+    xgboost_spectral_incomplete_inputs = sum(
+        row["xgboost_input_status"] != "READY" for row in rows
+    )
     return {
         "mining_run_id": mining_run_id,
         "models": artifacts,
@@ -275,6 +335,8 @@ def build_model_labeling_plan(
             "events": len(events),
             "ready_inputs": ready_inputs,
             "incomplete_inputs": len(events) - ready_inputs,
+            "xgboost_ready_inputs": xgboost_ready_inputs,
+            "xgboost_spectral_incomplete_inputs": xgboost_spectral_incomplete_inputs,
             "remoteclip_artifact_ready": artifacts["REMOTECLIP_LOGREG"]["ready"],
             "xgboost_artifact_ready": artifacts["XGBOOST"]["ready"],
             "inference_ready": ready_inputs > 0 and any(item["ready"] for item in artifacts.values()),

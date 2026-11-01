@@ -11,6 +11,25 @@ BAND_ORDER = ["B02", "B03", "B04", "B08", "B11", "B12", "SCL", "dataMask"]
 INDEX_DEFS = {"ndvi": ("B08", "B04"), "nbr": ("B08", "B12"), "ndmi": ("B08", "B11")}
 SCL_BAD = {0, 1, 3, 8, 9, 10, 11}
 SCL_REPORT = (2, 4, 5, 6, 7)
+REQUIRED_INDEX_MEDIANS = ("ndvi_median", "nbr_median", "ndmi_median")
+
+
+def missing_required_index_medians(stats: dict[str, float]) -> list[str]:
+    return [
+        name
+        for name in REQUIRED_INDEX_MEDIANS
+        if name not in stats or not np.isfinite(float(stats[name]))
+    ]
+
+
+def spectral_input_status(pre_count: int, post_count: int) -> str:
+    if pre_count == 0 and post_count == 0:
+        return "NO_SPECTRAL_BOTH"
+    if pre_count == 0:
+        return "NO_SPECTRAL_PRE"
+    if post_count == 0:
+        return "NO_SPECTRAL_POST"
+    return "READY"
 
 
 def stats_for_tif(tif_path: str | Path) -> dict[str, float]:

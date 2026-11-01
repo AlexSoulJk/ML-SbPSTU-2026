@@ -270,6 +270,7 @@ def sync_download_record(
     download.bands_json = json.dumps(metadata.get("bands") or S2_BANDS)
     download.cloud_fraction = float(metrics["cloud_fraction"])
     download.shadow_fraction = float(metrics["shadow_fraction"])
+    download.snow_fraction = float(metrics["snow_fraction"])
     download.nodata_fraction = float(metrics["nodata_fraction"])
     download.dark_fraction = float(metrics["dark_fraction"])
     download.is_bad_cloud = bool(metrics["is_bad_cloud"])

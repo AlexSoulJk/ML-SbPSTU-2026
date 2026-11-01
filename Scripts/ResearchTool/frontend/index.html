@@ -430,6 +430,7 @@
                   <button id="forestDataOperationsMiningRejectBtn" type="button" disabled>Reject checked</button>
                   <button id="forestDataOperationsMiningFillBtn" type="button" disabled>Fill to target</button>
                   <button id="forestDataOperationsMiningApplyBtn" class="primary" type="button" disabled>Create samples</button>
+                  <button id="forestDataOperationsMiningMasksBtn" type="button" disabled>Generate Hansen masks</button>
                   <button id="forestDataOperationsMiningCancelBtn" type="button" disabled>Cancel</button>
                 </div>
               </footer>
@@ -464,11 +465,11 @@
                     <input id="forestDataOperationsSampleLimit" type="number" min="1" max="1000" value="100" />
                   </label>
                   <label>
-                    Valid target
+                    Valid / PRE or POST
                     <input id="forestDataOperationsValidTarget" type="number" min="1" max="50" value="10" />
                   </label>
                   <label>
-                    QC cap
+                    QC cap / event
                     <input id="forestDataOperationsQcCap" type="number" min="1" max="100" value="50" />
                   </label>
                   <label>
@@ -484,6 +485,7 @@
                     <input id="forestDataOperationsLocalCloud" type="number" min="0" max="100" value="10" />
                   </label>
                 </div>
+                <p class="meta">Default balance for 10 valid scenes: spring 2, early summer 3, late summer 3, autumn 2. Targets are applied independently to PRE and POST for every event.</p>
                 <fieldset class="forestDataOperationsChecks">
                   <legend>Drivers</legend>
                   <label><input type="checkbox" value="Logging" data-data-operations-driver checked /> Logging</label>
@@ -770,6 +772,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=model-labeling-inference-3"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=sentinel-balanced-quota-1"></script>
   </body>
 </html>

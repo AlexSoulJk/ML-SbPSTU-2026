@@ -30,16 +30,22 @@ from backend.forest.hansen_service import hansen_tile_preview_payload  # noqa: E
 from backend.forest.db_sync_service import apply_operation, compare_portable_tables  # noqa: E402
 from backend.forest.model_labeling_service import build_model_labeling_plan  # noqa: E402
 from backend.forest.model_inference_service import (  # noqa: E402
+    InferenceEvent,
+    ModelInputIssue,
     Prediction,
+    XGBoostRunner,
     execute_model_labeling,
     file_sha256,
     stable_hash,
 )
+from backend.forest.sentinel_service import cloud_metrics  # noqa: E402
 from backend.forest.candidate_service import (  # noqa: E402
     ALGORITHM_NAME,
     ALGORITHM_VERSION,
     CandidateMiningOptions,
+    candidate_mask_run_status,
     candidate_hansen_preview_payload,
+    generate_candidate_masks_for_run,
     hansen_tile_inventory,
     materialize_candidates,
     mine_hansen_candidates,
@@ -54,6 +60,7 @@ from backend.forest.models import (  # noqa: E402
     HansenCandidateRun,
     HansenCandidateRunItem,
     HansenAnalysis,
+    HansenMask,
     HansenTile,
     LabelRun,
     ManualValidation,
@@ -66,7 +73,11 @@ from backend.forest.models import (  # noqa: E402
 from backend.forest.routes import SentinelBatchRequest, samples_select, selected_batch_samples  # noqa: E402
 from backend.forest.sentinel_batch_service import (  # noqa: E402
     BatchOptions,
+    execute_sentinel_batch,
+    period_season_qc_caps,
     plan_sentinel_batch,
+    season_qc_caps,
+    season_valid_targets,
 )
 
 
@@ -109,6 +120,77 @@ class DataOperationsTest(unittest.TestCase):
         self.db.close()
         self.engine.dispose()
 
+    def test_sentinel_qc_marks_scl_snow_as_bad_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tif_path = Path(temp_dir) / "snow.tif"
+            data = np.zeros((8, 4, 4), dtype=np.uint16)
+            data[:6] = 1200
+            data[6] = 11
+            data[7] = 1
+            with rasterio.open(
+                tif_path,
+                "w",
+                driver="GTiff",
+                width=4,
+                height=4,
+                count=8,
+                dtype="uint16",
+                transform=from_bounds(30.0, 59.0, 31.0, 60.0, 4, 4),
+            ) as target:
+                target.write(data)
+
+            metrics = cloud_metrics(tif_path)
+
+        self.assertEqual(metrics["snow_fraction"], 1.0)
+        self.assertTrue(metrics["is_bad_snow"])
+        self.assertTrue(metrics["is_bad_quality"])
+        self.assertIn("SNOW_OR_ICE", metrics["quality_flags"])
+
+    def test_xgboost_rejects_event_without_complete_spectral_inputs(self) -> None:
+        item = sample("spectral-missing")
+        event = SampleEvent(
+            event_id=event_id_for(item.sample_id, "HANSEN", 2020),
+            sample_id=item.sample_id,
+            event_year=2020,
+            source="HANSEN",
+            is_dominant=True,
+        )
+        pre = SentinelDownload(
+            download_id="spectral-pre",
+            sample_id=item.sample_id,
+            scene_id="pre",
+            period="PRE",
+            local_path="pre.tif",
+            bbox_json="[]",
+            bands_json="[]",
+            metadata_json="{}",
+        )
+        post = SentinelDownload(
+            download_id="spectral-post",
+            sample_id=item.sample_id,
+            scene_id="post",
+            period="POST",
+            local_path="post.tif",
+            bbox_json="[]",
+            bands_json="[]",
+            metadata_json="{}",
+        )
+        runner = XGBoostRunner.__new__(XGBoostRunner)
+        runner._stats_cache = {}
+        inference_item = InferenceEvent(
+            event=event,
+            sample=item,
+            downloads_by_period={"PRE": [pre], "POST": [post]},
+            previews={},
+            sample_events=[event],
+        )
+
+        with patch.object(runner, "_spectral_stats", return_value={}):
+            with self.assertRaises(ModelInputIssue) as raised:
+                runner.predict(inference_item)
+
+        self.assertEqual(raised.exception.code, "NO_SPECTRAL_BOTH")
+
     def test_hansen_backfill_is_deterministic_and_plannable(self) -> None:
         item = sample()
         histogram = [
@@ -145,11 +227,268 @@ class DataOperationsTest(unittest.TestCase):
                 mode="empty_samples",
                 seasons=("spring",),
                 target_valid=3,
-                max_qc_scenes=5,
+                max_qc_scenes=6,
             ),
         )
         self.assertEqual(plan["summary"]["samples_actionable"], 1)
-        self.assertEqual(plan["summary"]["operation_rows"], 9)
+        self.assertEqual(plan["summary"]["operation_rows"], 6)
+        self.assertEqual(plan["samples"][0]["target_valid"], 18)
+        self.assertEqual(plan["samples"][0]["max_qc_scenes"], 18)
+
+    def test_sentinel_batch_balances_valid_and_qc_budgets_by_season(self) -> None:
+        options = BatchOptions(
+            mode="multi_event_enrichment",
+            seasons=("spring", "early_summer", "late_summer", "autumn"),
+            target_valid=10,
+            max_qc_scenes=50,
+        )
+
+        self.assertEqual(
+            season_valid_targets(options),
+            {"spring": 2, "early_summer": 3, "late_summer": 3, "autumn": 2},
+        )
+        self.assertEqual(
+            season_qc_caps(options),
+            {"spring": 10, "early_summer": 15, "late_summer": 15, "autumn": 10},
+        )
+        self.assertEqual(
+            period_season_qc_caps(options),
+            {
+                ("PRE", "spring"): 5,
+                ("POST", "spring"): 5,
+                ("PRE", "early_summer"): 8,
+                ("POST", "early_summer"): 7,
+                ("PRE", "late_summer"): 7,
+                ("POST", "late_summer"): 8,
+                ("PRE", "autumn"): 5,
+                ("POST", "autumn"): 5,
+            },
+        )
+
+    def test_shared_scene_fills_overlapping_event_period_targets(self) -> None:
+        item = sample("sample-overlap-quota")
+        self.db.add(item)
+        self.db.add(
+            analysis(
+                item.sample_id,
+                "analysis-overlap-quota",
+                [
+                    {"year": 2018, "loss_area_ha": 2.0, "pixels": 20},
+                    {"year": 2020, "loss_area_ha": 3.0, "pixels": 30},
+                ],
+                2020,
+            )
+        )
+        self.db.commit()
+        backfill_hansen_events(self.db, dry_run=False)
+        self.db.add(
+            SentinelDownload(
+                download_id="download-overlap-quota",
+                sample_id=item.sample_id,
+                scene_id="scene-overlap-quota",
+                period="POST",
+                local_path="cache/overlap-quota.tif",
+                bbox_json="[29.9, 59.9, 30.1, 60.1]",
+                bands_json="[]",
+                cloud_fraction=0.0,
+                shadow_fraction=0.0,
+                nodata_fraction=0.0,
+                dark_fraction=0.0,
+                is_bad_cloud=False,
+                is_bad_quality=False,
+                quality_flags_json="[]",
+                metadata_json=json.dumps(
+                    {"item": {"id": "scene-overlap-quota", "datetime": "2019-06-20T10:00:00Z"}}
+                ),
+            )
+        )
+        self.db.commit()
+
+        plan = plan_sentinel_batch(
+            self.db,
+            [item],
+            BatchOptions(mode="multi_event_enrichment"),
+        )
+        sample_plan = plan["samples"][0]
+        filled = {
+            (row["event_year"], row["period"], row["season"]): row["valid_count"]
+            for row in sample_plan["operations"]
+            if row["valid_count"]
+        }
+
+        self.assertEqual(sample_plan["valid_count"], 2)
+        self.assertEqual(filled[(2018, "POST", "early_summer")], 1)
+        self.assertEqual(filled[(2020, "PRE", "early_summer")], 1)
+        self.assertNotIn((2018, "PRE", "early_summer"), filled)
+
+    def test_batch_executor_fills_each_period_and_season_target(self) -> None:
+        item = sample("sample-balanced-executor")
+        event = SampleEvent(
+            event_id="event-balanced-executor",
+            sample_id=item.sample_id,
+            event_year=2020,
+            source="HANSEN",
+            is_dominant=True,
+        )
+        self.db.add_all([item, event])
+        self.db.commit()
+
+        def fake_search(*, period, **_kwargs):
+            month_day = "05-10" if period.start_mmdd == "04-15" else "06-20"
+            scene_id = f"scene-{period.year}-{period.start_mmdd}"
+            return {
+                "request": {"year": period.year, "start": period.start_mmdd},
+                "items": [
+                    {
+                        "id": scene_id,
+                        "datetime": f"{period.year}-{month_day}T10:00:00Z",
+                        "cloud_cover": 0.0,
+                    }
+                ],
+            }
+
+        def fake_download(db, selected_sample, *, item, period, **_kwargs):
+            download_id = f"download-{item['id']}"
+            download = SentinelDownload(
+                download_id=download_id,
+                sample_id=selected_sample.sample_id,
+                scene_id=item["id"],
+                period=period,
+                local_path=f"cache/{download_id}.tif",
+                bbox_json="[29.9, 59.9, 30.1, 60.1]",
+                bands_json="[]",
+                cloud_fraction=0.0,
+                shadow_fraction=0.0,
+                nodata_fraction=0.0,
+                dark_fraction=0.0,
+                is_bad_cloud=False,
+                is_bad_quality=False,
+                quality_flags_json="[]",
+                metadata_json=json.dumps({"item": item}),
+            )
+            db.add(download)
+            db.flush()
+            return {"download_id": download_id}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_dir = Path(temp_dir) / "sentinel"
+            artifact_dir.mkdir()
+            with (
+                patch(
+                    "backend.forest.sentinel_batch_service.stac_search_s2",
+                    side_effect=fake_search,
+                ),
+                patch(
+                    "backend.forest.sentinel_batch_service.download_sentinel_for_sample",
+                    side_effect=fake_download,
+                ),
+                patch(
+                    "backend.forest.sentinel_batch_service.output_dir",
+                    return_value=artifact_dir,
+                ),
+            ):
+                result = execute_sentinel_batch(
+                    self.db,
+                    [item],
+                    BatchOptions(
+                        mode="multi_event_enrichment",
+                        seasons=("spring", "early_summer"),
+                        target_valid=2,
+                        max_qc_scenes=4,
+                    ),
+                )
+
+        links = list(self.db.scalars(select(SampleEventDownload)))
+        self.assertEqual(result["downloads_created"], 4)
+        self.assertEqual(result["actions"].get("downloaded_valid"), 4)
+        self.assertEqual(result["actions"].get("sample_done"), 1)
+        self.assertEqual(Counter(link.period for link in links), {"PRE": 2, "POST": 2})
+
+    def test_batch_target_counts_only_qc_valid_scenes(self) -> None:
+        item = sample("sample-qc-valid-target")
+        event = SampleEvent(
+            event_id="event-qc-valid-target",
+            sample_id=item.sample_id,
+            event_year=2020,
+            source="HANSEN",
+            is_dominant=True,
+        )
+        self.db.add_all([item, event])
+        self.db.commit()
+
+        def fake_search(*, period, **_kwargs):
+            return {
+                "request": {"year": period.year},
+                "items": [
+                    {
+                        "id": f"bad-{period.year}",
+                        "datetime": f"{period.year}-05-08T10:00:00Z",
+                        "cloud_cover": 0.0,
+                    },
+                    {
+                        "id": f"good-{period.year}",
+                        "datetime": f"{period.year}-05-20T10:00:00Z",
+                        "cloud_cover": 0.0,
+                    },
+                ],
+            }
+
+        def fake_download(db, selected_sample, *, item, period, **_kwargs):
+            download_id = f"download-{item['id']}"
+            is_bad = item["id"].startswith("bad-")
+            download = SentinelDownload(
+                download_id=download_id,
+                sample_id=selected_sample.sample_id,
+                scene_id=item["id"],
+                period=period,
+                local_path=f"cache/{download_id}.tif",
+                bbox_json="[29.9, 59.9, 30.1, 60.1]",
+                bands_json="[]",
+                cloud_fraction=0.0,
+                shadow_fraction=0.0,
+                nodata_fraction=0.5 if is_bad else 0.0,
+                dark_fraction=0.0,
+                is_bad_cloud=False,
+                is_bad_quality=is_bad,
+                quality_flags_json='["NO_DATA_OR_BLACK_PIXELS"]' if is_bad else "[]",
+                metadata_json=json.dumps({"item": item}),
+            )
+            db.add(download)
+            db.flush()
+            return {"download_id": download_id}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_dir = Path(temp_dir) / "sentinel"
+            artifact_dir.mkdir()
+            with (
+                patch(
+                    "backend.forest.sentinel_batch_service.stac_search_s2",
+                    side_effect=fake_search,
+                ),
+                patch(
+                    "backend.forest.sentinel_batch_service.download_sentinel_for_sample",
+                    side_effect=fake_download,
+                ),
+                patch(
+                    "backend.forest.sentinel_batch_service.output_dir",
+                    return_value=artifact_dir,
+                ),
+            ):
+                result = execute_sentinel_batch(
+                    self.db,
+                    [item],
+                    BatchOptions(
+                        mode="multi_event_enrichment",
+                        seasons=("spring",),
+                        target_valid=1,
+                        max_qc_scenes=4,
+                    ),
+                )
+
+        self.assertEqual(result["downloads_created"], 4)
+        self.assertEqual(result["actions"].get("downloaded_excluded"), 2)
+        self.assertEqual(result["actions"].get("downloaded_valid"), 2)
+        self.assertEqual(result["actions"].get("sample_done"), 1)
 
     def test_single_event_backfill_links_legacy_download(self) -> None:
         item = sample("sample-2")
@@ -848,6 +1187,177 @@ class DataOperationsTest(unittest.TestCase):
             self.assertTrue(second["cache_hit"])
             self.assertEqual(first["candidate_id"], candidate.candidate_id)
             self.assertTrue(first["png_url"].startswith("/cache/test/all_loss.png?v="))
+
+    def test_candidate_mask_job_is_idempotent_and_preserves_event_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tile_path = temp_path / "source" / "60N_030E.tif"
+            tile_path.parent.mkdir(parents=True)
+            data = np.zeros((400, 400), dtype=np.uint8)
+            data[170:230, 170:230] = 20
+            with rasterio.open(
+                tile_path,
+                "w",
+                driver="GTiff",
+                width=data.shape[1],
+                height=data.shape[0],
+                count=1,
+                dtype="uint8",
+                crs="EPSG:4326",
+                transform=from_bounds(34.0, 54.0, 36.0, 56.0, data.shape[1], data.shape[0]),
+                nodata=0,
+            ) as dataset:
+                dataset.write(data, 1)
+
+            run = HansenCandidateRun(
+                run_id="candidate-mask-run",
+                algorithm_name=ALGORITHM_NAME,
+                algorithm_version=ALGORITHM_VERSION,
+                hansen_dataset_version="GFC-test",
+                status="APPLIED",
+                target_count=1,
+                selected_count=1,
+                created_sample_count=1,
+                config_json="{}",
+            )
+            item = sample("candidate-mask-sample")
+            item.source_format = "HANSEN_MINING"
+            item.driver_primary = None
+            event = SampleEvent(
+                event_id=event_id_for(item.sample_id, "HANSEN", 2020),
+                sample_id=item.sample_id,
+                event_year=2020,
+                source="HANSEN",
+                loss_area_ha=20.0,
+                loss_share=1.0,
+                is_dominant=True,
+            )
+            download = SentinelDownload(
+                download_id="candidate-mask-download",
+                sample_id=item.sample_id,
+                scene_id="candidate-mask-scene",
+                period="POST",
+                local_path=str(temp_path / "sentinel.tif"),
+                bbox_json="[]",
+                bands_json="[]",
+                metadata_json="{}",
+            )
+            candidate = HansenCandidate(
+                candidate_id="candidate-mask",
+                algorithm_version=ALGORITHM_VERSION,
+                hansen_dataset_version="GFC-test",
+                lat=55.0,
+                lon=35.0,
+                aoi_size_m=2000.0,
+                aoi_bbox_json="[34.98, 54.98, 35.02, 55.02]",
+                primary_event_year=2020,
+                event_years_json="[2020]",
+                has_multiple_events=False,
+                component_area_ha=20.0,
+                dominant_loss_area_ha=20.0,
+                dominant_loss_fraction=1.0,
+                total_loss_area_ha=20.0,
+                post_2016_loss_aoi_percent=5.0,
+                dominant_event_aoi_percent=5.0,
+                pixel_count=200,
+                source_tile_ids_json='["60N_030E"]',
+                component_key="60N_030E:2020:mask",
+                created_sample_id=item.sample_id,
+                metadata_json=json.dumps(
+                    {
+                        "min_event_year": 2016,
+                        "histogram": [
+                            {"year": 2020, "pixels": 200, "loss_area_ha": 20.0},
+                        ],
+                    }
+                ),
+            )
+            self.db.add_all(
+                [
+                    run,
+                    item,
+                    event,
+                    EventReview(event_id=event.event_id, review_status="DRAFT"),
+                    download,
+                    SampleEventDownload(
+                        id="candidate-mask-link",
+                        event_id=event.event_id,
+                        download_id=download.download_id,
+                        period="POST",
+                    ),
+                    candidate,
+                    HansenCandidateRunItem(
+                        id="candidate-mask-run-item",
+                        run_id=run.run_id,
+                        candidate_id=candidate.candidate_id,
+                        decision="SELECTED",
+                        rank=1,
+                    ),
+                    HansenTile(
+                        layer="lossyear",
+                        tile_id="60N_030E",
+                        version="GFC-test",
+                        local_path=str(tile_path),
+                    ),
+                ]
+            )
+            self.db.commit()
+
+            cache_root = temp_path / "cache" / "hansen"
+            exports_root = temp_path / "exports"
+            with (
+                patch(
+                    "backend.forest.candidate_service.FOREST_HANSEN_CACHE_DIR",
+                    cache_root,
+                ),
+                patch(
+                    "backend.forest.candidate_service.FOREST_EXPORTS_DIR",
+                    exports_root,
+                ),
+            ):
+                first = generate_candidate_masks_for_run(
+                    self.db,
+                    run.run_id,
+                    execution_id="first",
+                )
+                second = generate_candidate_masks_for_run(
+                    self.db,
+                    run.run_id,
+                    execution_id="second",
+                )
+                status = candidate_mask_run_status(self.db, run.run_id)
+
+            analyses = list(
+                self.db.scalars(
+                    select(HansenAnalysis).where(HansenAnalysis.sample_id == item.sample_id)
+                )
+            )
+            masks = list(
+                self.db.scalars(
+                    select(HansenMask).where(HansenMask.sample_id == item.sample_id)
+                )
+            )
+            self.assertEqual(first["created"], 1)
+            self.assertEqual(first["events_modified"], 0)
+            self.assertEqual(second["created"], 0)
+            self.assertEqual(second["reused"], 1)
+            self.assertEqual(status, {"materialized": 1, "ready": 1, "pending": 0})
+            self.assertEqual(len(analyses), 1)
+            self.assertEqual(analyses[0].analysis_area_type, "candidate_aoi")
+            self.assertEqual(
+                {mask.mask_type for mask in masks},
+                {"aoi_all_loss", "aoi_dominant_year"},
+            )
+            self.assertEqual(self.db.get(SampleEvent, event.event_id).event_year, 2020)
+            self.assertIsNone(self.db.get(SampleEvent, event.event_id).source_analysis_id)
+            self.assertEqual(self.db.get(EventReview, event.event_id).review_status, "DRAFT")
+            self.assertIsNotNone(self.db.get(SampleEventDownload, "candidate-mask-link"))
+            for mask in masks:
+                path = Path(mask.local_path)
+                if not path.is_absolute():
+                    path = TOOL_ROOT.parents[1] / path
+                self.assertTrue(path.exists())
+                self.assertTrue(path.with_suffix(".png").exists())
 
     def test_db_sync_can_insert_versioned_label_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

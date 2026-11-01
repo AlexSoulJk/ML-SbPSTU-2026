@@ -398,6 +398,7 @@ class SentinelDownload(Base):
     bands_json: Mapped[str] = mapped_column(Text, nullable=False)
     cloud_fraction: Mapped[float | None] = mapped_column(Float)
     shadow_fraction: Mapped[float | None] = mapped_column(Float)
+    snow_fraction: Mapped[float | None] = mapped_column(Float)
     nodata_fraction: Mapped[float | None] = mapped_column(Float)
     dark_fraction: Mapped[float | None] = mapped_column(Float)
     is_bad_cloud: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

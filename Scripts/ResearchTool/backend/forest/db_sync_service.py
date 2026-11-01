@@ -112,6 +112,7 @@ DOWNLOAD_COLUMNS = [
     "bands_json",
     "cloud_fraction",
     "shadow_fraction",
+    "snow_fraction",
     "nodata_fraction",
     "dark_fraction",
     "is_bad_cloud",
@@ -1091,6 +1092,7 @@ SENTINEL_DOWNLOAD_DIFF_FIELDS = [
     "local_path",
     "cloud_fraction",
     "shadow_fraction",
+    "snow_fraction",
     "nodata_fraction",
     "dark_fraction",
     "is_bad_cloud",
@@ -1110,6 +1112,7 @@ def local_download_row(download: SentinelDownload) -> dict[str, Any]:
         "bands_json": download.bands_json,
         "cloud_fraction": download.cloud_fraction,
         "shadow_fraction": download.shadow_fraction,
+        "snow_fraction": download.snow_fraction,
         "nodata_fraction": download.nodata_fraction,
         "dark_fraction": download.dark_fraction,
         "is_bad_cloud": download.is_bad_cloud,
@@ -1120,7 +1123,7 @@ def local_download_row(download: SentinelDownload) -> dict[str, Any]:
 
 
 def download_values_equal(field: str, left: Any, right: Any) -> bool:
-    if field in {"cloud_fraction", "shadow_fraction", "nodata_fraction", "dark_fraction"}:
+    if field in {"cloud_fraction", "shadow_fraction", "snow_fraction", "nodata_fraction", "dark_fraction"}:
         return numeric_values_equal(left, right, tolerance=1e-4)
     if field in {"is_bad_cloud", "is_bad_quality"}:
         return bool_value(left) == bool_value(right)
@@ -1140,6 +1143,10 @@ def compare_sentinel_download_metadata(
 ) -> None:
     entity = "sentinel_downloads"
     incoming = incoming_download_rows(connection)
+    incoming_columns = table_columns(connection, "forest_sentinel_downloads")
+    comparable_fields = [
+        field for field in SENTINEL_DOWNLOAD_DIFF_FIELDS if field in incoming_columns
+    ]
     local = {
         download.download_id: local_download_row(download)
         for download in db.scalars(select(SentinelDownload))
@@ -1147,7 +1154,7 @@ def compare_sentinel_download_metadata(
     for key in sorted(set(local) & set(incoming)):
         left = local[key]
         right = incoming[key]
-        for field in SENTINEL_DOWNLOAD_DIFF_FIELDS:
+        for field in comparable_fields:
             if download_values_equal(field, left.get(field), right.get(field)):
                 continue
             add_summary(summary, entity, "metadata_diff")
@@ -1465,6 +1472,7 @@ def sentinel_cache_repair_payload(db: Session) -> dict[str, Any]:
                 "scene_id": download.scene_id,
                 "datetime": item.get("datetime") if isinstance(item, dict) else None,
                 "cloud_fraction": download.cloud_fraction,
+                "snow_fraction": download.snow_fraction,
                 "geotiff_exists": geotiff_exists,
                 "missing_geotiff": not geotiff_exists,
                 "missing_preview_count": len(missing_previews),
@@ -1737,6 +1745,7 @@ def apply_operation(db: Session, item: dict[str, Any]) -> None:
             db.add(existing)
         existing.cloud_fraction = row.get("cloud_fraction")
         existing.shadow_fraction = row.get("shadow_fraction")
+        existing.snow_fraction = row.get("snow_fraction")
         existing.nodata_fraction = row.get("nodata_fraction")
         existing.dark_fraction = row.get("dark_fraction")
         existing.is_bad_cloud = bool_value(row.get("is_bad_cloud"))

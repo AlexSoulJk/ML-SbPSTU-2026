@@ -27,9 +27,9 @@ from ResearchTool.backend.forest.storage_paths import resolve_storage_path  # no
 
 
 COHORTS = {
-    "valid": "MANUAL_VALID",
+    "valid":   "MANUAL_VALID",
     "unclear": "MANUAL_UNCLEAR",
-    "wrong": "MANUAL_WRONG",
+    "wrong":   "MANUAL_WRONG",
     "too old": "MANUAL_TOO_OLD",
 }
 

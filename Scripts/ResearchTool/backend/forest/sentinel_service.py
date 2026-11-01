@@ -48,8 +48,10 @@ S2_BANDS = ["B02", "B03", "B04", "B08", "B11", "B12", "SCL", "dataMask"]
 SENTINEL_VIEWS = ["rgb", "false_color", "ndvi", "nbr", "ndmi", "scl"]
 SCL_CLOUD_CLASSES = {8, 9, 10}
 SCL_SHADOW_CLASSES = {3}
+SCL_SNOW_CLASSES = {11}
 SENTINEL_CLOUD_THRESHOLD = 0.10
 SENTINEL_SHADOW_THRESHOLD = 0.35
+SENTINEL_SNOW_THRESHOLD = 0.50
 SENTINEL_NODATA_THRESHOLD = 0.10
 SENTINEL_DARK_BRIGHTNESS_THRESHOLD = 350.0
 SENTINEL_DARK_LOW_CONTRAST_REASON = "DARK_AND_LOW_CONTRAST"
@@ -61,6 +63,7 @@ AUTO_REVIEW_REASON_PRIORITY = (
     "NO_DATA_OR_BLACK_PIXELS",
     "CLOUDS",
     "CLOUD_SHADOW",
+    "SNOW_OR_ICE",
     SENTINEL_DARK_LOW_CONTRAST_REASON,
     "TOO_DARK_OR_LOW_CONTRAST",
 )
@@ -449,6 +452,7 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
         return {
             "cloud_fraction": 0.0,
             "shadow_fraction": 0.0,
+            "snow_fraction": 0.0,
             "nodata_fraction": 1.0,
             "dark_fraction": 1.0,
             "brightness_p05": 0.0,
@@ -458,6 +462,7 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
             "brightness_relative_contrast": 0.0,
             "is_bad_cloud": False,
             "is_bad_shadow": False,
+            "is_bad_snow": False,
             "is_bad_nodata": True,
             "is_too_dark": True,
             "is_dark_and_low_contrast": True,
@@ -467,8 +472,10 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
 
     cloud = np.isin(scl, list(SCL_CLOUD_CLASSES)) & valid
     shadow = np.isin(scl, list(SCL_SHADOW_CLASSES)) & valid
+    snow = np.isin(scl, list(SCL_SNOW_CLASSES)) & valid
     cloud_fraction = float(cloud.sum() / valid_count)
     shadow_fraction = float(shadow.sum() / valid_count)
+    snow_fraction = float(snow.sum() / valid_count)
     brightness = (red + green + blue) / 3.0
     valid_brightness = brightness[valid & np.isfinite(brightness)]
     clear_brightness = brightness[valid & ~cloud & ~shadow & np.isfinite(brightness)]
@@ -491,6 +498,7 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
         brightness_relative_contrast = 0.0
     is_bad_cloud = cloud_fraction > SENTINEL_CLOUD_THRESHOLD
     is_bad_shadow = shadow_fraction > SENTINEL_SHADOW_THRESHOLD
+    is_bad_snow = snow_fraction >= SENTINEL_SNOW_THRESHOLD
     is_bad_nodata = nodata_fraction > SENTINEL_NODATA_THRESHOLD
     is_dark_and_low_contrast = (
         clear_brightness.size > 0
@@ -507,11 +515,14 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
         quality_flags.append("CLOUDS")
     if is_bad_shadow:
         quality_flags.append("CLOUD_SHADOW")
+    if is_bad_snow:
+        quality_flags.append("SNOW_OR_ICE")
     if is_dark_and_low_contrast:
         quality_flags.append(SENTINEL_DARK_LOW_CONTRAST_REASON)
     return {
         "cloud_fraction": round(cloud_fraction, 4),
         "shadow_fraction": round(shadow_fraction, 4),
+        "snow_fraction": round(snow_fraction, 4),
         "nodata_fraction": round(nodata_fraction, 4),
         "dark_fraction": round(dark_fraction, 4),
         "brightness_p05": round(brightness_p05, 2),
@@ -521,6 +532,7 @@ def cloud_metrics(tif_path: Path) -> dict[str, Any]:
         "brightness_relative_contrast": round(brightness_relative_contrast, 4),
         "is_bad_cloud": is_bad_cloud,
         "is_bad_shadow": is_bad_shadow,
+        "is_bad_snow": is_bad_snow,
         "is_bad_nodata": is_bad_nodata,
         "is_too_dark": is_dark_and_low_contrast,
         "is_dark_and_low_contrast": is_dark_and_low_contrast,
@@ -658,6 +670,7 @@ def download_sentinel_for_sample(
     existing.bands_json = json.dumps(S2_BANDS)
     existing.cloud_fraction = float(metrics["cloud_fraction"])
     existing.shadow_fraction = float(metrics["shadow_fraction"])
+    existing.snow_fraction = float(metrics["snow_fraction"])
     existing.nodata_fraction = float(metrics["nodata_fraction"])
     existing.dark_fraction = float(metrics["dark_fraction"])
     existing.is_bad_cloud = bool(metrics["is_bad_cloud"])
@@ -681,6 +694,7 @@ def download_sentinel_for_sample(
         "cache_status": cache_status,
         "cloud_fraction": metrics["cloud_fraction"],
         "shadow_fraction": metrics["shadow_fraction"],
+        "snow_fraction": metrics["snow_fraction"],
         "nodata_fraction": metrics["nodata_fraction"],
         "dark_fraction": metrics["dark_fraction"],
         "brightness_p05": metrics["brightness_p05"],
@@ -761,6 +775,7 @@ def restore_sentinel_download_cache(
     download.bands_json = json.dumps(S2_BANDS)
     download.cloud_fraction = float(metrics["cloud_fraction"])
     download.shadow_fraction = float(metrics["shadow_fraction"])
+    download.snow_fraction = float(metrics["snow_fraction"])
     download.nodata_fraction = float(metrics["nodata_fraction"])
     download.dark_fraction = float(metrics["dark_fraction"])
     download.is_bad_cloud = bool(metrics["is_bad_cloud"])
@@ -780,6 +795,7 @@ def restore_sentinel_download_cache(
         "local_path": download.local_path,
         "cloud_fraction": metrics["cloud_fraction"],
         "shadow_fraction": metrics["shadow_fraction"],
+        "snow_fraction": metrics["snow_fraction"],
         "nodata_fraction": metrics["nodata_fraction"],
         "dark_fraction": metrics["dark_fraction"],
         "is_bad_quality": metrics["is_bad_quality"],
@@ -889,6 +905,7 @@ def sentinel_download_payload(db: Session, download: SentinelDownload) -> dict[s
         "cache_exists": download_cache_exists,
         "cloud_fraction": download.cloud_fraction,
         "shadow_fraction": download.shadow_fraction,
+        "snow_fraction": download.snow_fraction,
         "nodata_fraction": download.nodata_fraction,
         "dark_fraction": download.dark_fraction,
         "is_bad_cloud": download.is_bad_cloud,

@@ -19,7 +19,9 @@ from sqlalchemy.orm import Session
 from ..config import FOREST_CACHE_DIR, FOREST_EXPORTS_DIR
 from .ml.spectral_features import (
     median_feature_rows,
+    missing_required_index_medians,
     pre_post_features_from_stats,
+    spectral_input_status,
     stats_for_tif,
 )
 from .model_labeling_service import build_model_labeling_plan
@@ -77,6 +79,13 @@ class Prediction:
     probabilities: dict[str, float]
     input_fingerprint: str
     metadata: dict[str, Any]
+
+
+class ModelInputIssue(RuntimeError):
+    def __init__(self, code: str, message: str, metadata: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.metadata = metadata or {}
 
 
 class ModelRunner(Protocol):
@@ -412,12 +421,24 @@ class XGBoostRunner:
     def predict(self, item: InferenceEvent, should_cancel: CancelCallback | None = None) -> Prediction:
         if should_cancel and should_cancel():
             raise RuntimeError("Model labeling cancelled")
-        sources = []
-        paths_by_period: dict[str, list[Path]] = {"PRE": [], "POST": []}
-        for period in paths_by_period:
+        sources: list[dict[str, Any]] = []
+        stats_by_period: dict[str, list[dict[str, float]]] = {"PRE": [], "POST": []}
+        spectral_rejections: list[dict[str, Any]] = []
+        for period in stats_by_period:
             for download in item.downloads_by_period.get(period, []):
                 path = resolve_storage_path(download.local_path)
-                paths_by_period[period].append(path)
+                stats = self._spectral_stats(path)
+                missing = missing_required_index_medians(stats)
+                if missing:
+                    spectral_rejections.append(
+                        {
+                            "period": period,
+                            "download_id": download.download_id,
+                            "missing_features": missing,
+                        }
+                    )
+                    continue
+                stats_by_period[period].append(stats)
                 sources.append(
                     {
                         "period": period,
@@ -425,9 +446,27 @@ class XGBoostRunner:
                         "sha256": self._file_hash(path),
                     }
                 )
+        input_status = spectral_input_status(
+            len(stats_by_period["PRE"]),
+            len(stats_by_period["POST"]),
+        )
+        if input_status != "READY":
+            raise ModelInputIssue(
+                input_status,
+                (
+                    f"{input_status}: event {item.event.event_id} has no complete "
+                    "NDVI/NBR/NDMI input for the required period(s)"
+                ),
+                {
+                    "spectral_usable_counts": {
+                        period: len(rows) for period, rows in stats_by_period.items()
+                    },
+                    "spectral_rejections": spectral_rejections,
+                },
+            )
         values = pre_post_features_from_stats(
-            median_feature_rows(self._spectral_stats(path) for path in paths_by_period["PRE"]),
-            median_feature_rows(self._spectral_stats(path) for path in paths_by_period["POST"]),
+            median_feature_rows(stats_by_period["PRE"]),
+            median_feature_rows(stats_by_period["POST"]),
         )
         values.update(_sample_hansen_features(item))
         feature_values = [
@@ -466,6 +505,7 @@ class XGBoostRunner:
                 "feature_names": self.feature_names,
                 "feature_values": feature_values,
                 "inputs": sources,
+                "spectral_rejections": spectral_rejections,
             },
         )
 
@@ -623,6 +663,7 @@ def execute_model_labeling(
         artifact = plan["models"][source_name]
         label_run = _create_label_run(db, source_name, artifact, mining_run_id)
         model_errors = 0
+        model_input_issues = 0
         try:
             runner = factories[source_name](artifact)
         except Exception as exc:
@@ -710,6 +751,26 @@ def execute_model_labeling(
                         "input_fingerprint": prediction.input_fingerprint,
                     }
                 )
+            except ModelInputIssue as exc:
+                db.rollback()
+                model_input_issues += 1
+                counts["skipped_input"] += 1
+                report_rows.append(
+                    {
+                        "event_id": item.event.event_id,
+                        "sample_id": item.event.sample_id,
+                        "event_year": item.event.event_year,
+                        "source_name": source_name,
+                        "source_version": runner.source_version,
+                        "status": exc.code,
+                        "error": str(exc)[:500],
+                        "details_json": json.dumps(
+                            exc.metadata,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                    }
+                )
             except Exception as exc:
                 db.rollback()
                 model_errors += 1
@@ -731,12 +792,25 @@ def execute_model_labeling(
 
         current_run = db.get(LabelRun, label_run.label_run_id)
         if current_run is not None:
-            current_run.status = "CANCELLED" if cancelled else "PARTIAL" if model_errors else "READY"
+            current_run.status = (
+                "CANCELLED"
+                if cancelled
+                else "PARTIAL"
+                if model_errors or model_input_issues
+                else "READY"
+            )
             current_run.finished_at = utc_now()
             db.commit()
         model_summaries[source_name] = {
-            "status": "CANCELLED" if cancelled else "PARTIAL" if model_errors else "READY",
+            "status": (
+                "CANCELLED"
+                if cancelled
+                else "PARTIAL"
+                if model_errors or model_input_issues
+                else "READY"
+            ),
             "failed": model_errors,
+            "skipped_input": model_input_issues,
             "label_run_id": label_run.label_run_id,
         }
         if cancelled:
@@ -745,12 +819,21 @@ def execute_model_labeling(
     summary = {
         "execution_id": execution_id,
         "mining_run_id": mining_run_id,
-        "status": "CANCELLED" if cancelled else "COMPLETED_WITH_ERRORS" if counts["failed"] else "COMPLETED",
+        "status": (
+            "CANCELLED"
+            if cancelled
+            else "COMPLETED_WITH_ERRORS"
+            if counts["failed"]
+            else "COMPLETED_WITH_WARNINGS"
+            if counts["skipped_input"]
+            else "COMPLETED"
+        ),
         "events_ready": len(inputs),
         "models_ready": ready_models,
         "created": counts["created"],
         "reused": counts["reused"],
         "failed": counts["failed"],
+        "skipped_input": counts["skipped_input"],
         "model_runs": model_summaries,
     }
     artifact_id = execution_id or uuid.uuid4().hex

@@ -53,6 +53,8 @@ def migrate_forest_database() -> None:
             )
         if "nodata_fraction" not in sentinel_download_columns:
             connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN nodata_fraction FLOAT"))
+        if "snow_fraction" not in sentinel_download_columns:
+            connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN snow_fraction FLOAT"))
         if "dark_fraction" not in sentinel_download_columns:
             connection.execute(text("ALTER TABLE forest_sentinel_downloads ADD COLUMN dark_fraction FLOAT"))
         if "is_bad_quality" not in sentinel_download_columns:
