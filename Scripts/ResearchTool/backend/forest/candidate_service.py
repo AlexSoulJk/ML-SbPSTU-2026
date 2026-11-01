@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import math
 import uuid
 from collections import Counter, defaultdict, deque
@@ -61,6 +62,8 @@ from .models import (
 )
 from .storage_paths import resolve_storage_path, to_storage_path
 
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 ALGORITHM_NAME = "HANSEN_CANDIDATE_MINING"
 ALGORITHM_VERSION = "hansen_candidate_v1"
@@ -1256,8 +1259,17 @@ def generate_candidate_masks_for_run(
     created = 0
     reused = 0
     failed = 0
+    failure_counts: Counter[str] = Counter()
+    logged_failure_signatures: set[str] = set()
     cancelled = False
     total = len(candidates)
+    LOGGER.info(
+        "[HANSEN_MASKS] run_start run_id=%s candidates=%d ready=%d pending=%d",
+        run_id,
+        total,
+        len(ready_ids),
+        total - len(ready_ids),
+    )
     for index, candidate in enumerate(candidates, start=1):
         if should_cancel and should_cancel():
             cancelled = True
@@ -1297,6 +1309,23 @@ def generate_candidate_masks_for_run(
             except Exception as exc:
                 db.rollback()
                 failed += 1
+                failure_signature = f"{type(exc).__name__}: {exc}"
+                failure_counts[failure_signature] += 1
+                if (
+                    failure_signature not in logged_failure_signatures
+                    and len(logged_failure_signatures) < 5
+                ):
+                    logged_failure_signatures.add(failure_signature)
+                    LOGGER.exception(
+                        "[HANSEN_MASKS] candidate_failed run_id=%s candidate_id=%s "
+                        "sample_id=%s index=%d/%d error=%s",
+                        run_id,
+                        candidate.candidate_id,
+                        sample_id,
+                        index,
+                        total,
+                        failure_signature,
+                    )
                 report_rows.append(
                     {
                         "candidate_id": candidate.candidate_id,
@@ -1330,6 +1359,7 @@ def generate_candidate_masks_for_run(
         "created": created,
         "reused": reused,
         "failed": failed,
+        "failure_reasons": dict(failure_counts),
         "events_modified": 0,
         "reviews_modified": 0,
         "sentinel_links_modified": 0,
@@ -1338,6 +1368,18 @@ def generate_candidate_masks_for_run(
     summary_path = artifact_dir / "summary.json"
     summary["summary_json"] = to_storage_path(summary_path) or str(summary_path)
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    log_method = LOGGER.error if failed else LOGGER.info
+    log_method(
+        "[HANSEN_MASKS] run_done run_id=%s status=%s created=%d reused=%d failed=%d "
+        "failure_reasons=%s report=%s",
+        run_id,
+        summary["status"],
+        created,
+        reused,
+        failed,
+        dict(failure_counts),
+        summary["csv_path"],
+    )
     return summary
 
 

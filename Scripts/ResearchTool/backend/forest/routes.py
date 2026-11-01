@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import threading
 import uuid
 import zipfile
@@ -92,6 +93,7 @@ from .storage_paths import resolve_storage_path, to_storage_path
 
 
 router = APIRouter(prefix="/api/forest", tags=["forest"])
+LOGGER = logging.getLogger("uvicorn.error")
 
 MANUAL_VALIDATION_VALUES = {"Valid", "Unclear", "Wrong", "Too old"}
 SENTINEL_REVIEW_REASON_CODES = {
@@ -809,6 +811,11 @@ def run_hansen_candidate_masks_job(job_id: str, run_id: str) -> None:
         )
 
     try:
+        LOGGER.info(
+            "[HANSEN_MASKS] job_start job_id=%s run_id=%s",
+            job_id,
+            run_id,
+        )
         jobs.update(
             job_id,
             status="running",
@@ -843,9 +850,27 @@ def run_hansen_candidate_masks_job(job_id: str, run_id: str) -> None:
             ),
             result=result,
         )
+        LOGGER.info(
+            "[HANSEN_MASKS] job_done job_id=%s run_id=%s status=%s created=%s "
+            "reused=%s failed=%s report=%s",
+            job_id,
+            run_id,
+            result.get("status"),
+            result.get("created", 0),
+            result.get("reused", 0),
+            failed,
+            result.get("csv_path"),
+        )
     except Exception as exc:
         db.rollback()
         cancelled = job_cancel_requested(job_id)
+        LOGGER.exception(
+            "[HANSEN_MASKS] job_failed job_id=%s run_id=%s cancelled=%s error=%s",
+            job_id,
+            run_id,
+            cancelled,
+            exc,
+        )
         jobs.update(
             job_id,
             status="cancelled" if cancelled else "failed",
