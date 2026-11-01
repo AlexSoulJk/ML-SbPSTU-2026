@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .config import PROJECT_ROOT
@@ -146,12 +146,17 @@ def build_event_manifest(
     view = str(dataset_config.get("preview_view") or "rgb")
     allowed_periods = {str(period).upper() for period in dataset_config.get("periods", [])}
     season_windows = dict(dataset_config.get("season_windows") or {})
+    include_hansen_mining = bool(dataset_config.get("include_hansen_mining", False))
+
+    sample_filter = Sample.driver_primary.in_(sorted(target_classes))
+    if include_hansen_mining:
+        sample_filter = or_(sample_filter, Sample.source_format == "HANSEN_MINING")
 
     samples = {
         sample.sample_id: sample
         for sample in db.scalars(
             select(Sample)
-            .where(Sample.driver_primary.in_(sorted(target_classes)))
+            .where(sample_filter)
             .order_by(Sample.sample_id)
         )
     }
@@ -255,13 +260,15 @@ def build_event_manifest(
         validation = validations.get(sample.sample_id)
         row = {
             "sample_id": sample.sample_id,
+            "sample_source_file": sample.source_file,
+            "sample_source_format": sample.source_format,
             "event_id": event.event_id,
             "event_year": event.event_year,
             "event_loss_area_ha": event.loss_area_ha,
             "event_loss_share": event.loss_share,
             "event_is_dominant": bool(event.is_dominant),
             "is_multi_event_area": bool(sample.has_multiple_events),
-            "label": sample.driver_primary,
+            "label": sample.driver_primary or "",
             "manual_validation": validation or "",
             "validation_cohort": validation_cohort(validation),
             "download_id": download.download_id,

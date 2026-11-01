@@ -104,8 +104,27 @@ function setStatus(message) {
 }
 
 
-function dataOperationsRunning() {
+function dataOperationsJobRunning() {
   return ["queued", "running", "cancel_requested"].includes(forestState.dataOperationsJob?.status);
+}
+
+
+function dataOperationsRunning() {
+  return dataOperationsJobRunning() || Boolean(forestState.dataOperationsPlanning);
+}
+
+
+async function runDataOperationsPlan(host, message, action) {
+  if (dataOperationsRunning()) throw new Error("Another Data Operations task is already running.");
+  forestState.dataOperationsPlanning = { host, message };
+  setStatus(message);
+  renderJob();
+  try {
+    return await action();
+  } finally {
+    forestState.dataOperationsPlanning = null;
+    renderJob();
+  }
 }
 
 
@@ -560,6 +579,12 @@ function renderLabelingPlan() {
 
 
 function activeJobHost() {
+  const planningHost = forestState.dataOperationsPlanning?.host;
+  if (planningHost === "mine") return $("forestDataOperationsMiningJob");
+  if (planningHost === "labeling") return $("forestDataOperationsLabelingJob");
+  if (planningHost === "bundle") return $("forestDataOperationsBundleJob");
+  if (planningHost === "import") return $("forestDataOperationsImportJob");
+  if (planningHost === "download") return $("forestDataOperationsDownloadJob");
   const kind = forestState.dataOperationsJob?.kind || "";
   if (kind === "hansen_candidate_mining") return $("forestDataOperationsMiningJob");
   if (kind === "hansen_candidate_masks") return $("forestDataOperationsMiningJob");
@@ -583,60 +608,76 @@ function renderJob() {
   });
   const openLabelingButton = $("forestDataOperationsOpenLabelingBtn");
   if (openLabelingButton) openLabelingButton.hidden = true;
+  const planning = forestState.dataOperationsPlanning;
   const job = forestState.dataOperationsJob;
-  if (!job) return;
   const host = activeJobHost();
-  if (!host) return;
-  const total = Number(job.total || 0);
-  const done = Number(job.done || 0);
-  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
-  const result = job.result || {};
-  const verification = result.verification || null;
-  const artifactPath = result.zip_path
-    || result.csv_path
-    || result.bundle_selection
-    || result.operations_csv
-    || null;
-  host.innerHTML = `
-    <strong>${escapeHtml(job.stage || job.status)}</strong>
-    <span>${escapeHtml(job.message || "")}</span>
-    <div class="forestDataOperationsProgress"><span style="width:${Math.max(0, Math.min(100, percent))}%"></span></div>
-    ${verification ? `<div class="forestDataOperationsMetrics">
-      ${metricsHtml({
-        downloads_ready: `${verification.database_downloads}/${verification.bundle_downloads}`,
-        samples: verification.samples,
-        no_manual_samples: verification.samples_without_manual_validation,
-        preview_files_ready: verification.preview_files_ready,
-        missing_previews: verification.missing_preview_files,
-        incomplete_downloads: verification.incomplete_preview_downloads,
-      })}
-    </div>` : ""}
-    ${result.backup_path ? `<span class="meta">Database backup: ${escapeHtml(result.backup_path)}</span>` : ""}
-    ${artifactPath ? `<a class="forestDataOperationsArtifact" href="${artifactUrl(artifactPath)}">Open artifact</a>` : ""}
-  `;
+  if (planning && host) {
+    host.innerHTML = `
+      <strong class="forestDataOperationsBusyLabel"><span class="forestDataOperationsSpinner" aria-hidden="true"></span> Building plan</strong>
+      <span>${escapeHtml(planning.message || "Please wait")}</span>
+      <div class="forestDataOperationsProgress indeterminate"><span></span></div>
+    `;
+  } else if (job && host) {
+    const total = Number(job.total || 0);
+    const done = Number(job.done || 0);
+    const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    const result = job.result || {};
+    const verification = result.verification || null;
+    const archivePaths = Array.isArray(result.archive_paths) ? result.archive_paths : [];
+    const artifactPath = archivePaths.length
+      ? null
+      : result.zip_path
+        || result.csv_path
+        || result.bundle_selection
+        || result.operations_csv
+        || null;
+    const archiveLinks = archivePaths.map((path, index) => `
+      <a class="forestDataOperationsArtifact" href="${artifactUrl(path)}">ZIP part ${index + 1}/${archivePaths.length}</a>
+    `).join("");
+    host.innerHTML = `
+      <strong>${escapeHtml(job.stage || job.status)}</strong>
+      <span>${escapeHtml(job.message || "")}</span>
+      <div class="forestDataOperationsProgress"><span style="width:${Math.max(0, Math.min(100, percent))}%"></span></div>
+      ${verification ? `<div class="forestDataOperationsMetrics">
+        ${metricsHtml({
+          downloads_ready: `${verification.database_downloads}/${verification.bundle_downloads}`,
+          samples: verification.samples,
+          no_manual_samples: verification.samples_without_manual_validation,
+          preview_files_ready: verification.preview_files_ready,
+          missing_previews: verification.missing_preview_files,
+          incomplete_downloads: verification.incomplete_preview_downloads,
+        })}
+      </div>` : ""}
+      ${result.parts?.length ? `<span class="meta">Created ${escapeHtml(archivePaths.length)}/${escapeHtml(result.parts.length)} ZIP parts</span>` : ""}
+      ${result.backup_path ? `<span class="meta">Database backup: ${escapeHtml(result.backup_path)}</span>` : ""}
+      ${archiveLinks ? `<div class="forestDataOperationsArtifacts">${archiveLinks}</div>` : ""}
+      ${artifactPath ? `<a class="forestDataOperationsArtifact" href="${artifactUrl(artifactPath)}">Open artifact</a>` : ""}
+    `;
+  }
 
   const running = dataOperationsRunning();
+  const jobRunning = dataOperationsJobRunning();
   document.querySelectorAll(
-    ".forestDataOperationsSetup input, .forestDataOperationsSetup select, .forestDataOperationsSetup button, [data-data-operations-tab], #forestDataOperationsMiningPlanBtn, #forestDataOperationsLabelingPlanBtn, #forestDataOperationsDownloadPlanBtn, #forestDataOperationsBundlePlanBtn, #forestDataOperationsImportPlanBtn",
+    ".forestDataOperationsSetup input, .forestDataOperationsSetup select, .forestDataOperationsSetup button, [data-data-operations-tab], .forestDataOperationsActionBar button",
   ).forEach((control) => {
     control.disabled = running;
   });
   $("forestDataOperationsEventSyncBtn").disabled = running || !forestState.dataOperationsEventPlan;
-  $("forestDataOperationsMiningCancelBtn").disabled = !running;
-  $("forestDataOperationsDownloadCancelBtn").disabled = !running;
-  $("forestDataOperationsBundleCancelBtn").disabled = !running;
-  $("forestDataOperationsImportCancelBtn").disabled = !running;
+  $("forestDataOperationsMiningCancelBtn").disabled = !jobRunning;
+  $("forestDataOperationsDownloadCancelBtn").disabled = !jobRunning;
+  $("forestDataOperationsBundleCancelBtn").disabled = !jobRunning;
+  $("forestDataOperationsImportCancelBtn").disabled = !jobRunning;
   $("forestDataOperationsDownloadStartBtn").disabled = running || !forestState.dataOperationsSelectedKeys.size;
   $("forestDataOperationsBundleStartBtn").disabled = running || !forestState.dataOperationsBundleSelectedIds.size;
   $("forestDataOperationsImportStartBtn").disabled = running || !forestState.dataOperationsImportPlan?.can_apply;
   $("forestDataOperationsLabelingStartBtn").disabled = running
     || !forestState.dataOperationsLabelingPlan?.summary?.inference_ready;
-  $("forestDataOperationsLabelingCancelBtn").disabled = !running
+  $("forestDataOperationsLabelingCancelBtn").disabled = !jobRunning
     || forestState.dataOperationsJob?.kind !== "model_labeling";
   const downloadMiningRunId = $("forestDataOperationsDownloadMiningRun").value;
   if (openLabelingButton) {
     openLabelingButton.hidden = !(
-      job.kind === "sentinel_batch_download"
+      job?.kind === "sentinel_batch_download"
       && !running
       && $("forestDataOperationsDownloadMode").value === "hansen_mining_run"
       && downloadMiningRunId
@@ -761,6 +802,10 @@ function renderBundlePlan() {
     identity_conflicts: plan.summary.identity_conflicts,
     previews_to_rebuild: plan.summary.previews_to_rebuild,
     event_links: plan.summary.event_links,
+    zip_parts: plan.summary.estimated_zip_parts,
+    max_part: plan.summary.max_zip_size_mib ? `${plan.summary.max_zip_size_mib} MiB` : "single ZIP",
+    largest_part: humanBytes(plan.summary.largest_part_estimated_bytes),
+    oversized_downloads: plan.summary.oversized_single_downloads,
   });
   const eventById = new Map((plan.events || []).map((event) => [event.event_id, event]));
   const linksByDownload = new Map();
@@ -1062,12 +1107,15 @@ export function initDataOperations(callbacks) {
   $("forestDataOperationsLabelingPlanBtn").addEventListener("click", () => callbacks.run(async () => {
     const runId = $("forestDataOperationsLabelingRun").value;
     if (!runId) throw new Error("Select a mining run first.");
-    setStatus("checking model artifacts and event inputs");
-    forestState.dataOperationsLabelingPlan = await planModelLabeling({
-      mining_run_id: runId,
-      remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
-      xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
-    });
+    forestState.dataOperationsLabelingPlan = await runDataOperationsPlan(
+      "labeling",
+      "checking model artifacts and event inputs",
+      () => planModelLabeling({
+        mining_run_id: runId,
+        remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
+        xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
+      }),
+    );
     renderLabelingPlan();
     setStatus(`${forestState.dataOperationsLabelingPlan.summary.ready_inputs} event input(s) ready for inference`);
   }));
@@ -1096,8 +1144,11 @@ export function initDataOperations(callbacks) {
   });
 
   $("forestDataOperationsEventPlanBtn").addEventListener("click", () => callbacks.run(async () => {
-    setStatus("checking Hansen events");
-    const result = await planEventBackfill(null);
+    const result = await runDataOperationsPlan(
+      "download",
+      "checking Hansen events",
+      () => planEventBackfill(null),
+    );
     forestState.dataOperationsEventPlan = result;
     $("forestDataOperationsEventSyncBtn").disabled = !result.total;
     $("forestDataOperationsDownloadSummary").innerHTML = metricsHtml({
@@ -1116,8 +1167,11 @@ export function initDataOperations(callbacks) {
     watchJob(job, callbacks);
   }));
   $("forestDataOperationsDownloadPlanBtn").addEventListener("click", () => callbacks.run(async () => {
-    setStatus("building Sentinel download plan");
-    const plan = await planSentinelBatch(downloadPayload(callbacks));
+    const plan = await runDataOperationsPlan(
+      "download",
+      "building Sentinel download plan",
+      () => planSentinelBatch(downloadPayload(callbacks)),
+    );
     forestState.dataOperationsPlan = plan;
     forestState.dataOperationsSelectedKeys = new Set(
       plan.samples.flatMap((sample) => (
@@ -1162,6 +1216,14 @@ export function initDataOperations(callbacks) {
     forestState.dataOperationsBundleSelectedIds = new Set();
     renderBundlePlan();
   });
+  const resetBundlePlanForZipSettings = () => {
+    $("forestDataOperationsBundlePartSize").disabled = !$("forestDataOperationsCreateZip").checked;
+    forestState.dataOperationsBundlePlan = null;
+    forestState.dataOperationsBundleSelectedIds = new Set();
+    renderBundlePlan();
+  };
+  $("forestDataOperationsCreateZip").addEventListener("change", resetBundlePlanForZipSettings);
+  $("forestDataOperationsBundlePartSize").addEventListener("change", resetBundlePlanForZipSettings);
   $("forestDataOperationsInventoryFile").addEventListener("change", (event) => callbacks.run(async () => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1184,6 +1246,10 @@ export function initDataOperations(callbacks) {
       profile: $("forestDataOperationsBundleProfile").value,
       periods: checkedValues("[data-data-operations-export-period]"),
       exclude_reviewed_bad: $("forestDataOperationsExcludeBad").checked,
+      max_zip_size_mib: $("forestDataOperationsCreateZip").checked
+        && $("forestDataOperationsBundlePartSize").value
+        ? numberValue("forestDataOperationsBundlePartSize", null)
+        : null,
       limit: $("forestDataOperationsBundleLimit").value
         ? numberValue("forestDataOperationsBundleLimit", null)
         : null,
@@ -1196,8 +1262,11 @@ export function initDataOperations(callbacks) {
       if (!forestState.dataOperationsLastBatchSelectionPath) throw new Error("Choose the batch bundle_selection.json first.");
       payload.selection_path = forestState.dataOperationsLastBatchSelectionPath;
     }
-    setStatus("building bundle plan");
-    const plan = await planSentinelBundle(payload);
+    const plan = await runDataOperationsPlan(
+      "bundle",
+      "building bundle plan and calculating checksums",
+      () => planSentinelBundle(payload),
+    );
     forestState.dataOperationsBundlePlan = plan;
     forestState.dataOperationsBundleSelectedIds = new Set(plan.download_ids);
     renderBundlePlan();
@@ -1219,6 +1288,10 @@ export function initDataOperations(callbacks) {
       profile: $("forestDataOperationsBundleProfile").value,
       exclude_reviewed_bad: $("forestDataOperationsExcludeBad").checked,
       create_zip: $("forestDataOperationsCreateZip").checked,
+      max_zip_size_mib: $("forestDataOperationsCreateZip").checked
+        && $("forestDataOperationsBundlePartSize").value
+        ? numberValue("forestDataOperationsBundlePartSize", null)
+        : null,
       source: plan?.source || "selection",
     });
     watchJob(job, callbacks);
@@ -1232,12 +1305,15 @@ export function initDataOperations(callbacks) {
   $("forestDataOperationsImportPlanBtn").addEventListener("click", () => callbacks.run(async () => {
     const bundlePath = $("forestDataOperationsImportCandidate").value;
     if (!bundlePath) throw new Error("Select a bundle first.");
-    setStatus("validating bundle");
-    const plan = await planBundleImport({
-      bundle_path: bundlePath,
-      overwrite_existing: $("forestDataOperationsOverwrite").checked,
-      rebuild_previews: $("forestDataOperationsRebuildPreviews").checked,
-    });
+    const plan = await runDataOperationsPlan(
+      "import",
+      "validating bundle files and checksums",
+      () => planBundleImport({
+        bundle_path: bundlePath,
+        overwrite_existing: $("forestDataOperationsOverwrite").checked,
+        rebuild_previews: $("forestDataOperationsRebuildPreviews").checked,
+      }),
+    );
     forestState.dataOperationsImportPlan = plan;
     renderImportPlan();
     setStatus(plan.can_apply ? "bundle ready to import" : "bundle or database conflicts must be resolved");

@@ -96,6 +96,7 @@ export const forestState = {
   dataOperationsOpen: false,
   dataOperationsTab: "mine",
   dataOperationsStatus: "ready",
+  dataOperationsPlanning: null,
   dataOperationsPlan: null,
   dataOperationsJob: null,
   dataOperationsJobId: null,

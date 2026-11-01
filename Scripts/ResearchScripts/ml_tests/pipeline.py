@@ -30,6 +30,16 @@ from .reporting import (
     write_csv,
     write_json,
 )
+from .latent_diagnostics import (
+    diagnostics_report_markdown,
+    diagnostic_figures,
+    run_latent_diagnostics as compute_latent_diagnostics,
+)
+from .sample_evaluation import (
+    evaluation_figures,
+    run_valid_post_clustering,
+    serializable_result,
+)
 
 
 class ForestMLPipeline:
@@ -126,19 +136,23 @@ class ForestMLPipeline:
         self,
         *,
         backfill_plan: dict[str, Any] | None = None,
+        include_hansen_mining: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         include_virtual = bool(
             self.config.data.get("dataset", {}).get("include_virtual_backfill", True)
         )
         virtual = virtual_backfill_rows(backfill_plan or {}) if include_virtual else []
+        dataset_config = dict(self.config.data.get("dataset", {}))
+        dataset_config["include_hansen_mining"] = bool(include_hansen_mining)
         with self.session() as db:
             manifest, audit = build_event_manifest(
                 db,
-                dataset_config=dict(self.config.data.get("dataset", {})),
+                dataset_config=dataset_config,
                 virtual_links=virtual,
             )
         audit["database_fingerprint"] = database_fingerprint(self.database_path)
         audit["virtual_backfill_links"] = len(virtual)
+        audit["include_hansen_mining"] = bool(include_hansen_mining)
         write_csv(self.run_dir / "dataset_manifest.csv", manifest)
         write_json(self.run_dir / "dataset_audit.json", audit)
         cohort_rows = [
@@ -214,6 +228,124 @@ class ForestMLPipeline:
         self.summary["status"] = "completed"
         self._save_summary()
         return {**result, "nomanual_review_queue": queue, "event_records": event_records}
+
+    def run_valid_post_sample_evaluation(
+        self,
+        manifest: list[dict[str, Any]],
+        embeddings,
+        *,
+        pca_variance: float = 0.95,
+        k_min: int = 2,
+        k_max: int = 10,
+        stability_runs: int = 20,
+        stability_sample_fraction: float = 0.80,
+        random_state: int = 42,
+    ) -> dict[str, Any]:
+        if not embeddings:
+            raise ValueError("Sample evaluation requires cached or computed embeddings.")
+        result = run_valid_post_clustering(
+            manifest,
+            embeddings,
+            pca_variance=pca_variance,
+            k_min=k_min,
+            k_max=k_max,
+            stability_runs=stability_runs,
+            stability_sample_fraction=stability_sample_fraction,
+            random_state=random_state,
+        )
+        write_json(self.run_dir / "valid_post_sample_evaluation.json", serializable_result(result))
+        write_csv(self.run_dir / "valid_post_event_clusters.csv", result["event_rows"])
+        write_csv(self.run_dir / "valid_post_pca_summary.csv", result["pca"]["rows"])
+        write_csv(self.run_dir / "valid_post_kmeans_metrics.csv", result["kmeans"]["rows"])
+        write_csv(self.run_dir / "valid_post_cluster_stability.csv", result["stability"]["rows"])
+        write_csv(self.run_dir / "valid_post_cluster_stability_runs.csv", result["stability"]["details"])
+        write_csv(self.run_dir / "valid_post_gmm_metrics.csv", result["gmm"]["rows"])
+        write_csv(self.run_dir / "valid_post_hdbscan_sweep.csv", result["hdbscan"]["rows"])
+        write_csv(self.run_dir / "valid_post_kmeans_composition.csv", result["kmeans_composition"])
+        write_csv(self.run_dir / "valid_post_hdbscan_composition.csv", result["hdbscan_composition"])
+
+        import matplotlib.pyplot as plt
+
+        for name, figure in evaluation_figures(result).items():
+            figure.savefig(self.run_dir / "plots" / f"valid_post_{name}.png", dpi=160)
+            plt.close(figure)
+        self.summary["valid_post_sample_evaluation"] = result["summary"]
+        self._save_summary()
+        return result
+
+    def run_latent_diagnostics(
+        self,
+        manifest: list[dict[str, Any]],
+        embeddings,
+        evaluation: dict[str, Any],
+        *,
+        remoteclip_version: str = "v1",
+        reference_k: int = 3,
+        membership_runs: int = 40,
+        membership_sample_fraction: float = 0.80,
+        random_state: int = 42,
+    ) -> dict[str, Any]:
+        if not embeddings:
+            raise ValueError("Latent diagnostics require cached or computed embeddings.")
+        with self.session() as db:
+            result = compute_latent_diagnostics(
+                db,
+                manifest,
+                embeddings,
+                evaluation,
+                remoteclip_version=remoteclip_version,
+                reference_k=reference_k,
+                membership_runs=membership_runs,
+                membership_sample_fraction=membership_sample_fraction,
+                random_state=random_state,
+            )
+
+        tables = {
+            "latent_manual_events.csv": result["manual_rows"],
+            "latent_hansen_events.csv": result["hansen_rows"],
+            "latent_event_level_table.csv": result["final_rows"],
+            "latent_cluster_roles.csv": result["cluster_roles"],
+            "latent_cluster_label_season.csv": result["cluster_label_season"],
+            "latent_cluster_label_multi_event.csv": result["cluster_label_multi_event"],
+            "latent_mode_comparison.csv": result["mode_comparison"],
+            "latent_mode_seasons.csv": result["mode_seasons"],
+            "latent_loo_knownness_quantiles.csv": result["loo_quantiles"],
+            "latent_probability_by_cluster.csv": result["probability_by_cluster"],
+            "latent_probability_correlations.csv": result["probability_correlations"],
+            "latent_ambiguity_reject.csv": result["ambiguity_reject"],
+            "latent_knownness_reject.csv": result["knownness_reject"],
+            "latent_combined_reject.csv": result["combined_reject"],
+            "latent_train_hansen_quantiles.csv": result["train_hansen_quantiles"],
+            "latent_domain_shift.csv": result["domain_shift"],
+            "latent_hansen_model_interaction.csv": result["hansen_group_summary"],
+            "latent_hdbscan_noise.csv": result["hdbscan_noise_summary"],
+            "latent_knn_rank_stability.csv": result["knn_rank_stability"],
+            "latent_knn_unknown_overlap.csv": result["knn_unknown_overlap"],
+            "latent_membership_stability.csv": result["membership_stability"],
+            "latent_membership_stability_summary.csv": result["membership_stability_summary"],
+            "latent_membership_stability_runs.csv": result["membership_stability_runs"],
+        }
+        for filename, rows in tables.items():
+            write_csv(self.run_dir / filename, rows)
+        write_json(self.run_dir / "latent_diagnostics_summary.json", result["summary"])
+        report_path = self.run_dir / "REPORT.md"
+        report_path.write_text(
+            diagnostics_report_markdown(result),
+            encoding="utf-8",
+        )
+        result["report_path"] = report_path
+
+        import matplotlib.pyplot as plt
+
+        for name, figure in diagnostic_figures(result).items():
+            figure.savefig(self.run_dir / "plots" / f"latent_{name}.png", dpi=160)
+            plt.close(figure)
+        self.summary["latent_diagnostics"] = {
+            **result["summary"],
+            "report_path": self._display_path(report_path),
+        }
+        self._save_summary()
+        return result
 
     def load_previous_baseline(self) -> dict[str, Any] | None:
         candidates = sorted(

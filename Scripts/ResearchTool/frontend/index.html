@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=model-labeling-inference-3" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=multipart-bundle-1" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -591,6 +591,10 @@
                   Limit
                   <input id="forestDataOperationsBundleLimit" type="number" min="1" placeholder="all" />
                 </label>
+                <label title="Each generated ZIP remains an independently importable bundle. Leave empty to create one ZIP.">
+                  ZIP part size, MiB
+                  <input id="forestDataOperationsBundlePartSize" type="number" min="10" max="10240" step="50" value="500" placeholder="single ZIP" />
+                </label>
                 <label class="toggle"><input id="forestDataOperationsExcludeBad" type="checkbox" checked /> <span>Exclude reviewed bad</span></label>
                 <label class="toggle"><input id="forestDataOperationsCreateZip" type="checkbox" checked /> <span>Create ZIP</span></label>
               </aside>
@@ -772,6 +776,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=sentinel-balanced-quota-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=multipart-bundle-1"></script>
   </body>
 </html>

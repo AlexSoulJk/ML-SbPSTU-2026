@@ -2509,6 +2509,42 @@ textarea {
   background: var(--brand);
 }
 
+.forestDataOperationsProgress.indeterminate span {
+  width: 38%;
+  animation: forestDataOperationsProgress 1.15s ease-in-out infinite;
+}
+
+.forestDataOperationsBusyLabel {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.forestDataOperationsSpinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #cbd8d1;
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: forestDataOperationsSpin 0.8s linear infinite;
+}
+
+.forestDataOperationsArtifacts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+@keyframes forestDataOperationsProgress {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(275%); }
+}
+
+@keyframes forestDataOperationsSpin {
+  to { transform: rotate(360deg); }
+}
+
 .forestValidation {
   display: grid;
   grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr) auto;

@@ -227,6 +227,7 @@ class BundlePlanRequest(BaseModel):
     profile: str = "geotiff_only"
     exclude_reviewed_bad: bool = True
     limit: int | None = Field(default=None, ge=1, le=100000)
+    max_zip_size_mib: int | None = Field(default=None, ge=10, le=10240)
 
 
 class BundleExportJobRequest(BaseModel):
@@ -235,6 +236,7 @@ class BundleExportJobRequest(BaseModel):
     exclude_reviewed_bad: bool = True
     create_zip: bool = True
     source: str = "selection"
+    max_zip_size_mib: int | None = Field(default=None, ge=10, le=10240)
 
 
 class BundleImportRequest(BaseModel):
@@ -955,6 +957,8 @@ def run_sentinel_batch_job(job_id: str, request: SentinelBatchRequest) -> None:
             should_cancel=lambda: job_cancel_requested(job_id),
         )
         cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
+        archive_count = len(result.get("archive_paths") or [])
+        archive_text = f", {archive_count} ZIP part(s)" if result.get("parts") else ""
         jobs.update(
             job_id,
             status="cancelled" if cancelled else "completed",
@@ -1090,6 +1094,7 @@ def run_bundle_export_job(job_id: str, request: BundleExportJobRequest) -> None:
             exclude_reviewed_bad=request.exclude_reviewed_bad,
             create_zip=request.create_zip,
             source=request.source,
+            max_zip_size_mib=request.max_zip_size_mib,
             progress=progress,
             should_cancel=lambda: job_cancel_requested(job_id),
         )
@@ -1100,7 +1105,10 @@ def run_bundle_export_job(job_id: str, request: BundleExportJobRequest) -> None:
             stage="cancelled" if cancelled else "done",
             done=result["unique_files"],
             total=result["unique_files"],
-            message=f"Bundle: {result['copied']} copied, {result['failed']} failed",
+            message=(
+                f"Bundle: {result['copied']} copied, {result['failed']} failed"
+                f"{archive_text}"
+            ),
             result=result,
         )
     except Exception as exc:
@@ -1995,6 +2003,7 @@ def create_bundle_plan(
             profile=request.profile,
             exclude_reviewed_bad=request.exclude_reviewed_bad,
             source=request.source,
+            max_zip_size_mib=request.max_zip_size_mib,
         )
         result["source_details"] = source_details
         result["summary"]["identity_conflicts"] = source_details.get(
@@ -2028,7 +2037,12 @@ def get_bundle_artifact(job_id: str) -> FileResponse:
     job = jobs.get(job_id)
     if job is None or not job.result:
         raise HTTPException(status_code=404, detail="Bundle artifact is not ready.")
-    raw_path = job.result.get("zip_path") or job.result.get("manifest_path")
+    archive_paths = job.result.get("archive_paths") or []
+    raw_path = (
+        job.result.get("zip_path")
+        or (archive_paths[0] if archive_paths else None)
+        or job.result.get("manifest_path")
+    )
     if not raw_path:
         raise HTTPException(status_code=404, detail="Bundle artifact is not available.")
     path = data_operation_input_path(str(raw_path))

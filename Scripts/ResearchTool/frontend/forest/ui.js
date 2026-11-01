@@ -1,5 +1,5 @@
 import { clearForestLayers, renderForestMap } from "./map.js?v=candidate-hansen-masks-2";
-import { initDataOperations } from "./data_operations.js?v=sentinel-balanced-quota-1";
+import { initDataOperations } from "./data_operations.js?v=multipart-bundle-1";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,

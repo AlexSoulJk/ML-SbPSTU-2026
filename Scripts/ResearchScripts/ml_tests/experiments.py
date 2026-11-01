@@ -44,6 +44,8 @@ def aggregate_event_embeddings(
             {
                 "record_id": str(row["event_id"]),
                 "sample_id": str(row["sample_id"]),
+                "sample_source_file": str(row.get("sample_source_file") or ""),
+                "sample_source_format": str(row.get("sample_source_format") or ""),
                 "event_id": str(row["event_id"]),
                 "event_year": int(row["event_year"]),
                 "event_loss_area_ha": row.get("event_loss_area_ha"),

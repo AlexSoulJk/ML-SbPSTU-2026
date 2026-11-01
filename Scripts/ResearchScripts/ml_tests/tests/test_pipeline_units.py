@@ -17,7 +17,13 @@ from ml_tests.config import ExperimentConfig
 from ml_tests.embeddings import EmbeddingCache, l2_normalize
 from ml_tests.event_links import apply_dominant_event_backfill, plan_dominant_event_backfill
 from ml_tests.experiments import records_for_variant
+from ml_tests.latent_diagnostics import (
+    _align_labels,
+    _class_conditional_scores,
+    _knn_scores,
+)
 from ml_tests.reporting import baseline_metrics_html
+from ml_tests.sample_evaluation import run_valid_post_clustering
 from ml_tests.splits import assert_no_group_leakage, build_saved_splits
 
 from ResearchTool.backend.forest.models import (
@@ -201,6 +207,100 @@ class SplitAndWeightTests(unittest.TestCase):
         self.assertEqual(weights, {"s1": 1.0, "s2": 1.0})
 
 
+class ValidPostSampleEvaluationTests(unittest.TestCase):
+    def test_clustering_uses_only_manual_valid_post_events(self) -> None:
+        generator = np.random.default_rng(42)
+        manifest: list[dict] = []
+        embeddings: dict[str, np.ndarray] = {}
+        for index in range(30):
+            download_id = f"download-{index}"
+            center = np.array([1, 1, 1, 0, 0, 0], dtype=np.float32)
+            if index >= 15:
+                center = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
+            embeddings[f"{download_id}:rgb"] = center + generator.normal(0, 0.08, 6)
+            manifest.append(
+                {
+                    "eligible": True,
+                    "sample_id": f"sample-{index}",
+                    "event_id": f"event-{index}",
+                    "event_year": 2020 + index % 3,
+                    "event_loss_area_ha": 10.0,
+                    "event_loss_share": 0.5,
+                    "event_is_dominant": True,
+                    "is_multi_event_area": False,
+                    "label": "Logging" if index < 15 else "Wildfire",
+                    "validation_cohort": "MANUAL_VALID",
+                    "period": "POST",
+                    "download_id": download_id,
+                    "view": "rgb",
+                    "season": "late_summer",
+                }
+            )
+        manifest.append(
+            {
+                **manifest[0],
+                "sample_id": "not-valid-sample",
+                "event_id": "not-valid-event",
+                "download_id": "not-valid-download",
+                "validation_cohort": "NO_MANUAL_WEAK",
+            }
+        )
+        embeddings["not-valid-download:rgb"] = np.ones(6, dtype=np.float32)
+
+        result = run_valid_post_clustering(
+            manifest,
+            embeddings,
+            k_min=2,
+            k_max=5,
+            stability_runs=4,
+            stability_sample_fraction=0.8,
+            hdbscan_parameter_grid=[(5, 3), (8, 5)],
+        )
+
+        self.assertEqual(result["summary"]["events"], 30)
+        self.assertEqual(result["summary"]["validation_cohort"], "MANUAL_VALID")
+        self.assertEqual(result["summary"]["period"], "POST")
+        self.assertEqual(result["summary"]["silhouette_k"], 2)
+        self.assertEqual(len(result["event_rows"]), 30)
+        np.testing.assert_allclose(
+            np.linalg.norm(result["dataset"]["matrix"], axis=1),
+            np.ones(30),
+            atol=1e-6,
+        )
+
+    def test_loo_knownness_excludes_self_and_class_similarity_is_labeled(self) -> None:
+        matrix = np.asarray(
+            [
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.0, 1.0],
+                [0.1, 0.9],
+            ],
+            dtype=np.float32,
+        )
+        matrix /= np.linalg.norm(matrix, axis=1, keepdims=True)
+        scores = _knn_scores(matrix, matrix, k_values=(1, 2, 3), leave_one_out=True)
+        self.assertLess(scores[0]["nearest_similarity"], 1.0)
+        self.assertAlmostEqual(
+            scores[0]["knownness_k1"],
+            float(matrix[0] @ matrix[1]),
+            places=6,
+        )
+        conditional = _class_conditional_scores(
+            matrix,
+            matrix,
+            ["Logging", "Logging", "Wildfire", "Wildfire"],
+            leave_one_out=True,
+        )
+        self.assertEqual(conditional[0]["nearest_class_prediction"], "Logging")
+        self.assertEqual(conditional[2]["nearest_class_prediction"], "Wildfire")
+
+    def test_cluster_alignment_removes_label_permutation(self) -> None:
+        reference = np.asarray([0, 0, 1, 1, 2, 2])
+        predicted = np.asarray([2, 2, 0, 0, 1, 1])
+        np.testing.assert_array_equal(_align_labels(reference, predicted), reference)
+
+
 class ModelArtifactTests(unittest.TestCase):
     def test_remoteclip_artifact_round_trip_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -301,6 +401,26 @@ class NotebookTests(unittest.TestCase):
         self.assertIn("baseline_metrics_html", code)
         self.assertIn("SAVE_REMOTECLIP_ARTIFACT", code)
         self.assertIn("plan_remoteclip_model_export", code)
+        self.assertEqual(notebook["nbformat"], 4)
+
+    def test_sample_evaluation_notebook_contains_latent_diagnostics(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "valid_post_sample_evaluation.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        self.assertNotIn("def ", code)
+        self.assertIn("run_latent_diagnostics", code)
+        self.assertIn("latent_event_level_table.csv", markdown)
+        self.assertIn("Manual-vs-Hansen domain shift", markdown)
+        self.assertIn("Combined UNKNOWN and AMBIGUOUS reject", markdown)
         self.assertEqual(notebook["nbformat"], 4)
 
     def test_metrics_table_contains_actual_values(self) -> None:

@@ -57,6 +57,9 @@ ProgressCallback = Callable[[str, str, int, int], None]
 CancelCallback = Callable[[], bool]
 BUNDLE_BACKUP_DIR = FOREST_DATA_DIR / "backups"
 EXPECTED_PREVIEW_VIEWS = {"rgb", "false_color", "ndvi", "nbr", "ndmi", "scl"}
+MIB = 1024 * 1024
+ZIP_PART_RESERVED_BYTES = MIB
+ZIP_PART_RESERVED_FRACTION = 0.01
 
 
 def portable_path(path: str | Path) -> str:
@@ -332,6 +335,95 @@ def event_snapshot(db: Session, downloads: list[SentinelDownload]) -> list[dict[
     ]
 
 
+def zip_part_payload_limit(max_zip_size_mib: int) -> int:
+    """Reserve room for manifests and ZIP headers so a part stays below its UI limit."""
+    max_bytes = int(max_zip_size_mib) * MIB
+    reserved = max(ZIP_PART_RESERVED_BYTES, int(max_bytes * ZIP_PART_RESERVED_FRACTION))
+    return max(1, max_bytes - reserved)
+
+
+def partition_bundle_downloads(
+    download_ids: list[str],
+    files: list[dict[str, Any]],
+    max_zip_size_mib: int | None,
+) -> list[dict[str, Any]]:
+    """Keep every download and all of its files in the same independently importable part."""
+    files_by_download: dict[str, list[dict[str, Any]]] = {
+        download_id: [] for download_id in download_ids
+    }
+    for row in files:
+        files_by_download.setdefault(str(row.get("download_id") or ""), []).append(row)
+
+    if max_zip_size_mib is None:
+        return [
+            {
+                "download_ids": list(download_ids),
+                "files": list(files),
+                "estimated_bytes": sum(
+                    int(row.get("bytes") or 0) for row in files if row.get("exists")
+                ),
+            }
+        ] if download_ids or files else []
+
+    payload_limit = zip_part_payload_limit(max_zip_size_mib)
+    parts: list[dict[str, Any]] = []
+    current_ids: list[str] = []
+    current_files: list[dict[str, Any]] = []
+    current_bytes = 0
+
+    def flush() -> None:
+        nonlocal current_ids, current_files, current_bytes
+        if not current_ids and not current_files:
+            return
+        parts.append(
+            {
+                "download_ids": current_ids,
+                "files": current_files,
+                "estimated_bytes": current_bytes,
+            }
+        )
+        current_ids = []
+        current_files = []
+        current_bytes = 0
+
+    for download_id in download_ids:
+        download_files = files_by_download.get(download_id, [])
+        download_bytes = sum(
+            int(row.get("bytes") or 0)
+            for row in download_files
+            if row.get("exists")
+        )
+        if current_ids and current_bytes + download_bytes > payload_limit:
+            flush()
+        current_ids.append(download_id)
+        current_files.extend(download_files)
+        current_bytes += download_bytes
+    flush()
+    return parts
+
+
+def bundle_partition_summary(
+    download_ids: list[str],
+    files: list[dict[str, Any]],
+    max_zip_size_mib: int | None,
+) -> dict[str, Any]:
+    parts = partition_bundle_downloads(download_ids, files, max_zip_size_mib)
+    payload_limit = zip_part_payload_limit(max_zip_size_mib) if max_zip_size_mib else None
+    oversized = [
+        part for part in parts
+        if payload_limit is not None and int(part["estimated_bytes"]) > payload_limit
+    ]
+    return {
+        "estimated_zip_parts": len(parts) if max_zip_size_mib else 1 if parts else 0,
+        "max_zip_size_mib": max_zip_size_mib,
+        "largest_part_estimated_bytes": max(
+            (int(part["estimated_bytes"]) for part in parts),
+            default=0,
+        ),
+        "oversized_single_downloads": len(oversized),
+    }
+
+
 def bundle_plan(
     db: Session,
     download_ids: list[str],
@@ -339,6 +431,7 @@ def bundle_plan(
     profile: str = "geotiff_only",
     exclude_reviewed_bad: bool = True,
     source: str = "selection",
+    max_zip_size_mib: int | None = None,
 ) -> dict[str, Any]:
     downloads, unknown = selected_downloads(
         db,
@@ -349,6 +442,11 @@ def bundle_plan(
     missing = [row for row in files if not row["exists"]]
     event_links = event_link_snapshot(db, downloads)
     events = event_snapshot(db, downloads)
+    partition_summary = bundle_partition_summary(
+        [download.download_id for download in downloads],
+        files,
+        max_zip_size_mib,
+    )
     return {
         "source": source,
         "profile": profile,
@@ -363,6 +461,7 @@ def bundle_plan(
             "unknown_download_ids": len(unknown),
             "previews_to_rebuild": len(downloads) if profile == "geotiff_only" else 0,
             "event_links": len(event_links),
+            **partition_summary,
         },
         "events": events,
         "event_links": event_links,
@@ -378,6 +477,7 @@ def export_bundle(
     exclude_reviewed_bad: bool = True,
     create_zip: bool = True,
     source: str = "selection",
+    max_zip_size_mib: int | None = None,
     progress: ProgressCallback | None = None,
     should_cancel: CancelCallback | None = None,
 ) -> dict[str, Any]:
@@ -389,12 +489,25 @@ def export_bundle(
         profile=profile,
         exclude_reviewed_bad=exclude_reviewed_bad,
         source=source,
+        max_zip_size_mib=max_zip_size_mib,
     )
     downloads, _ = selected_downloads(
         db,
         plan["download_ids"],
         exclude_reviewed_bad=False,
     )
+    if create_zip and max_zip_size_mib is not None:
+        return export_multipart_bundle(
+            db,
+            plan,
+            downloads,
+            profile=profile,
+            exclude_reviewed_bad=exclude_reviewed_bad,
+            source=source,
+            max_zip_size_mib=max_zip_size_mib,
+            progress=progress,
+            should_cancel=should_cancel,
+        )
     bundle_dir = output_dir("sentinel_bundle")
     copied = 0
     failed = 0
@@ -427,6 +540,7 @@ def export_bundle(
         "options": {
             "exclude_reviewed_bad": exclude_reviewed_bad,
             "create_zip": create_zip,
+            "max_zip_size_mib": max_zip_size_mib,
         },
         "downloads": [
             {
@@ -460,6 +574,7 @@ def export_bundle(
             "exclude_reviewed_bad": exclude_reviewed_bad,
             "create_zip": create_zip,
             "source": source,
+            "max_zip_size_mib": max_zip_size_mib,
         },
         "copied": copied,
         "failed": failed,
@@ -476,6 +591,241 @@ def export_bundle(
         archive_path = None
         summary["zip_path"] = None
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def export_multipart_bundle(
+    db: Session,
+    plan: dict[str, Any],
+    downloads: list[SentinelDownload],
+    *,
+    profile: str,
+    exclude_reviewed_bad: bool,
+    source: str,
+    max_zip_size_mib: int,
+    progress: ProgressCallback | None = None,
+    should_cancel: CancelCallback | None = None,
+) -> dict[str, Any]:
+    """Write several regular bundle ZIPs instead of a non-portable split ZIP archive."""
+    bundle_dir = output_dir("sentinel_bundle")
+    parts = partition_bundle_downloads(
+        plan["download_ids"],
+        plan["files"],
+        max_zip_size_mib,
+    )
+    downloads_by_id = {download.download_id: download for download in downloads}
+    total_work = len(plan["files"]) + len(parts)
+    copied = 0
+    failed = 0
+    copied_progress = 0
+    archive_paths: list[str] = []
+    part_summaries: list[dict[str, Any]] = []
+    max_archive_bytes = int(max_zip_size_mib) * MIB
+
+    for part_number, part in enumerate(parts, start=1):
+        if should_cancel and should_cancel():
+            break
+        part_name = f"{bundle_dir.name}_part_{part_number:03d}_of_{len(parts):03d}"
+        part_dir = bundle_dir / part_name
+        part_downloads = [
+            downloads_by_id[download_id]
+            for download_id in part["download_ids"]
+            if download_id in downloads_by_id
+        ]
+        part_ids = {download.download_id for download in part_downloads}
+        sample_ids = {download.sample_id for download in part_downloads}
+
+        for row in part["files"]:
+            copied_progress += 1
+            if should_cancel and should_cancel():
+                row["action"] = "cancelled"
+                continue
+            if not row["exists"]:
+                continue
+            source_path = resolve_storage_path(row["relative_path"])
+            target = part_dir / "files" / row["relative_path"]
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target)
+                row["action"] = "copied"
+                copied += 1
+            except Exception as exc:
+                row["action"] = "failed"
+                row["error"] = str(exc)[:500]
+                failed += 1
+            if progress:
+                progress(
+                    "copying",
+                    f"Part {part_number}/{len(parts)}: {copied_progress}/{len(plan['files'])} files",
+                    copied_progress,
+                    total_work,
+                )
+
+        part_events = [
+            event for event in plan["events"] if event.get("sample_id") in sample_ids
+        ]
+        part_event_ids = {event.get("event_id") for event in part_events}
+        part_event_links = [
+            link for link in plan["event_links"]
+            if link.get("download_id") in part_ids and link.get("event_id") in part_event_ids
+        ]
+        manifest = {
+            "manifest_version": 2,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "bundle_name": part_name,
+            "source": source,
+            "profile": profile,
+            "options": {
+                "exclude_reviewed_bad": exclude_reviewed_bad,
+                "create_zip": True,
+                "max_zip_size_mib": max_zip_size_mib,
+            },
+            "multipart": {
+                "bundle_group": bundle_dir.name,
+                "part_number": part_number,
+                "part_count": len(parts),
+            },
+            "downloads": [
+                {
+                    "download_id": download.download_id,
+                    "sample_id": download.sample_id,
+                    "scene_id": download.scene_id,
+                    "period": download.period,
+                    "raster_path": portable_path(resolved_raster_path(download)[0]),
+                }
+                for download in part_downloads
+            ],
+            "events": part_events,
+            "event_links": part_event_links,
+            "files": part["files"],
+        }
+        manifest_path = part_dir / "manifest.json"
+        files_path = part_dir / "files.csv"
+        operations_path = part_dir / "operations.csv"
+        errors_path = part_dir / "errors.csv"
+        summary_path = part_dir / "summary.json"
+        part_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        write_rows_csv(files_path, part["files"])
+        write_rows_csv(operations_path, part["files"])
+        write_rows_csv(
+            errors_path,
+            [row for row in part["files"] if row["action"] == "failed"],
+        )
+        summary_path.write_text(
+            json.dumps(
+                {
+                    "part_number": part_number,
+                    "part_count": len(parts),
+                    "downloads": len(part_downloads),
+                    "files": len(part["files"]),
+                    "estimated_bytes": int(part["estimated_bytes"]),
+                    "archive_bytes": 0,
+                    "archive_path": None,
+                    "error": "",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        archive_path: Path | None = None
+        archive_error = ""
+        if not (should_cancel and should_cancel()):
+            if progress:
+                progress(
+                    "archiving",
+                    f"Creating ZIP part {part_number}/{len(parts)}",
+                    len(plan["files"]) + part_number - 1,
+                    total_work,
+                )
+            archive_path = Path(
+                shutil.make_archive(str(part_dir), "zip", root_dir=part_dir)
+            )
+            if archive_path.stat().st_size > max_archive_bytes:
+                actual_mib = archive_path.stat().st_size / MIB
+                archive_error = (
+                    f"ZIP part is {actual_mib:.1f} MiB and exceeds the "
+                    f"{max_zip_size_mib} MiB limit. Increase the part size."
+                )
+                archive_path.unlink()
+                archive_path = None
+                failed += 1
+            else:
+                archive_paths.append(str(archive_path))
+
+        part_summary = {
+            "part_number": part_number,
+            "part_count": len(parts),
+            "downloads": len(part_downloads),
+            "files": len(part["files"]),
+            "estimated_bytes": int(part["estimated_bytes"]),
+            "archive_bytes": archive_path.stat().st_size if archive_path else 0,
+            "archive_path": str(archive_path) if archive_path else None,
+            "error": archive_error,
+        }
+        part_summaries.append(part_summary)
+        summary_path.write_text(
+            json.dumps(part_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if progress:
+            progress(
+                "archiving",
+                f"Created ZIP part {part_number}/{len(parts)}",
+                len(plan["files"]) + part_number,
+                total_work,
+            )
+
+    cancelled = bool(should_cancel and should_cancel())
+    index_path = bundle_dir / "bundle_index.json"
+    operations_path = bundle_dir / "operations.csv"
+    errors_path = bundle_dir / "errors.csv"
+    summary_path = bundle_dir / "summary.json"
+    write_rows_csv(operations_path, plan["files"])
+    write_rows_csv(
+        errors_path,
+        [row for row in plan["files"] if row["action"] == "failed"],
+    )
+    index_payload = {
+        "manifest_version": 2,
+        "bundle_group": bundle_dir.name,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "max_zip_size_mib": max_zip_size_mib,
+        "parts": part_summaries,
+    }
+    index_path.write_text(
+        json.dumps(index_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    summary = {
+        **plan["summary"],
+        "status": "cancelled" if cancelled else "completed",
+        "options": {
+            "profile": profile,
+            "exclude_reviewed_bad": exclude_reviewed_bad,
+            "create_zip": True,
+            "source": source,
+            "max_zip_size_mib": max_zip_size_mib,
+        },
+        "copied": copied,
+        "failed": failed,
+        "bundle_dir": str(bundle_dir),
+        "manifest_path": str(index_path),
+        "zip_path": archive_paths[0] if len(archive_paths) == 1 else None,
+        "archive_paths": archive_paths,
+        "parts": part_summaries,
+        "operations_csv": str(operations_path),
+        "errors_csv": str(errors_path),
+    }
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return summary
 
 
