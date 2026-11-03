@@ -15,11 +15,14 @@ from typing import Any, Callable
 import numpy as np
 import rasterio
 from affine import Affine
+from pyproj import CRS as PyprojCRS
+from rasterio.crs import CRS as RasterioCRS
 from rasterio.enums import Resampling
 from rasterio.features import geometry_mask
 from rasterio.mask import mask as rio_mask
 from rasterio.merge import merge as rio_merge
 from rasterio.transform import array_bounds
+from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_geom
 from scipy import ndimage
 from shapely.geometry import shape
@@ -75,6 +78,8 @@ RUN_DECISIONS = {"ELIGIBLE", "SELECTED", "USER_REJECTED", "REJECTED"}
 CANDIDATE_PREVIEW_SCHEMA_VERSION = 1
 CANDIDATE_MASK_ANALYSIS_AREA_TYPE = "candidate_aoi"
 CANDIDATE_MASK_TYPES = {"aoi_all_loss", "aoi_dominant_year"}
+WGS84_RASTER_CRS = RasterioCRS.from_epsg(4326)
+WGS84_PYPROJ_CRS = PyprojCRS.from_epsg(4326)
 
 ProgressCallback = Callable[[str, str, int, int], None]
 CancelCallback = Callable[[], bool]
@@ -934,15 +939,80 @@ def _candidate_lossyear_raster(
     geometry = geometry_payload["viewer_aoi"]
     requested_bbox = geometry_payload["viewer_aoi_bbox"]
     with ExitStack() as stack:
-        datasets = [stack.enter_context(rasterio.open(path)) for _tile_id, path in source_rows]
-        crs_values = {str(dataset.crs).upper() for dataset in datasets if dataset.crs}
-        if crs_values not in ({"EPSG:4326"}, {"OGC:CRS84"}):
-            raise ValueError(
-                "Candidate Hansen masks expect all source tiles in EPSG:4326/CRS84."
+        opened_sources = [
+            (tile_id, path, stack.enter_context(rasterio.open(path)))
+            for tile_id, path in source_rows
+        ]
+        invalid_sources: list[str] = []
+        merge_sources = []
+        requested_left, requested_bottom, requested_right, requested_top = requested_bbox
+        for tile_id, path, dataset in opened_sources:
+            source_crs = dataset.crs
+            bounds = dataset.bounds
+            has_lonlat_bounds = (
+                all(math.isfinite(float(value)) for value in bounds)
+                and -180.0001 <= bounds.left < bounds.right <= 180.0001
+                and -90.0001 <= bounds.bottom < bounds.top <= 90.0001
+                and bounds.left < requested_right
+                and bounds.right > requested_left
+                and bounds.bottom < requested_top
+                and bounds.top > requested_bottom
             )
-        source_profile = datasets[0].profile.copy()
+            if source_crs is None:
+                if not has_lonlat_bounds:
+                    invalid_sources.append(
+                        f"{tile_id} ({path}): crs=<missing>, bounds={tuple(round(float(value), 6) for value in bounds)}"
+                    )
+                    continue
+                # Official Hansen tiles are lon/lat rasters. Some GDAL builds lose the
+                # GeoTIFF CRS authority while preserving the correct geotransform, so
+                # infer WGS84 only after validating degree-like bounds and AOI overlap.
+                merge_sources.append(
+                    stack.enter_context(
+                        WarpedVRT(
+                            dataset,
+                            src_crs=WGS84_RASTER_CRS,
+                            crs=WGS84_RASTER_CRS,
+                            resampling=Resampling.nearest,
+                        )
+                    )
+                )
+                continue
+            try:
+                is_wgs84 = PyprojCRS.from_user_input(source_crs).equals(
+                    WGS84_PYPROJ_CRS,
+                    ignore_axis_order=True,
+                )
+            except (TypeError, ValueError):
+                is_wgs84 = False
+            if not is_wgs84:
+                invalid_sources.append(
+                    f"{tile_id} ({path}): crs={source_crs}, bounds={tuple(round(float(value), 6) for value in bounds)}"
+                )
+                continue
+            if source_crs == WGS84_RASTER_CRS:
+                merge_sources.append(dataset)
+            else:
+                # rasterio.merge requires literal CRS equality. Normalize equivalent
+                # WGS84 definitions such as OGC:CRS84 and mixed GDAL representations.
+                merge_sources.append(
+                    stack.enter_context(
+                        WarpedVRT(
+                            dataset,
+                            crs=WGS84_RASTER_CRS,
+                            resampling=Resampling.nearest,
+                        )
+                    )
+                )
+        if invalid_sources:
+            raise ValueError(
+                "Candidate Hansen masks expect WGS84 lon/lat source tiles. "
+                f"Invalid source(s): {'; '.join(invalid_sources)}"
+            )
+        source_profile = merge_sources[0].profile.copy()
+        source_profile["crs"] = WGS84_RASTER_CRS
         mosaic, transform = rio_merge(
-            datasets,
+            merge_sources,
             bounds=tuple(float(value) for value in requested_bbox),
             nodata=0,
             dtype="uint8",

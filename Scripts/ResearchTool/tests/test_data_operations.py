@@ -51,6 +51,7 @@ from backend.forest.candidate_service import (  # noqa: E402
     ALGORITHM_NAME,
     ALGORITHM_VERSION,
     CandidateMiningOptions,
+    _candidate_lossyear_raster,
     candidate_mask_run_status,
     candidate_hansen_preview_payload,
     candidate_run_payload,
@@ -1545,6 +1546,73 @@ class DataOperationsTest(unittest.TestCase):
                     path = TOOL_ROOT.parents[1] / path
                 self.assertTrue(path.exists())
                 self.assertTrue(path.with_suffix(".png").exists())
+
+    def test_candidate_lossyear_raster_accepts_equivalent_or_missing_wgs84_crs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            candidate = HansenCandidate(lon=35.0, lat=55.0, aoi_size_m=2000.0)
+            data = np.full((200, 200), 20, dtype=np.uint8)
+
+            for filename, source_crs in (
+                ("crs84.tif", "OGC:CRS84"),
+                ("missing_crs.tif", None),
+            ):
+                tile_path = temp_path / filename
+                profile = {
+                    "driver": "GTiff",
+                    "width": data.shape[1],
+                    "height": data.shape[0],
+                    "count": 1,
+                    "dtype": "uint8",
+                    "transform": from_bounds(
+                        34.0,
+                        54.0,
+                        36.0,
+                        56.0,
+                        data.shape[1],
+                        data.shape[0],
+                    ),
+                    "nodata": 0,
+                }
+                if source_crs is not None:
+                    profile["crs"] = source_crs
+                with rasterio.open(tile_path, "w", **profile) as dataset:
+                    dataset.write(data, 1)
+
+                loss, output_profile, _bbox = _candidate_lossyear_raster(
+                    candidate,
+                    [("60N_030E", tile_path)],
+                    min_event_year=2016,
+                )
+
+                self.assertTrue(np.any(loss == 20), filename)
+                self.assertEqual(output_profile["crs"].to_epsg(), 4326)
+
+    def test_candidate_lossyear_raster_reports_actual_invalid_crs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tile_path = Path(temp_dir) / "projected.tif"
+            data = np.full((20, 20), 20, dtype=np.uint8)
+            with rasterio.open(
+                tile_path,
+                "w",
+                driver="GTiff",
+                width=data.shape[1],
+                height=data.shape[0],
+                count=1,
+                dtype="uint8",
+                crs="EPSG:3857",
+                transform=from_bounds(34.0, 54.0, 36.0, 56.0, data.shape[1], data.shape[0]),
+                nodata=0,
+            ) as dataset:
+                dataset.write(data, 1)
+
+            candidate = HansenCandidate(lon=35.0, lat=55.0, aoi_size_m=2000.0)
+            with self.assertRaisesRegex(ValueError, "EPSG:3857"):
+                _candidate_lossyear_raster(
+                    candidate,
+                    [("60N_030E", tile_path)],
+                    min_event_year=2016,
+                )
 
     def test_db_sync_can_insert_versioned_label_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
