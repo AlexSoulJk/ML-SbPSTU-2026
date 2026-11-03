@@ -4,18 +4,6 @@ import sys
 import time
 from pathlib import Path
 
-import os
-from pathlib import Path
-
-# Указываем PROJ на папку rasterio (у него свой proj.db)
-_RASTERIO_PROJ = Path(r"C:\Users\Asus\ML-SbPSTU-2026\Lib\site-packages\rasterio\proj_data")
-if _RASTERIO_PROJ.joinpath("proj.db").exists():
-    os.environ["PROJ_LIB"] = str(_RASTERIO_PROJ)
-    os.environ["PROJ_DATA"] = str(_RASTERIO_PROJ)
-    # Убираем чужой GDAL_DATA от PostgreSQL, он мешает
-    os.environ.pop("GDAL_DATA", None)
-    print(f"PROJ_LIB → {_RASTERIO_PROJ}")
-
 from sqlalchemy import func, select
 
 from backend.forest.database import SessionLocal
