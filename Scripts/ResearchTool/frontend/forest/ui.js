@@ -1178,14 +1178,32 @@ function ensureCompareMap(kind) {
   return map;
 }
 
+function destroyCompareMaps() {
+  Object.keys(forestState.compareLayers).forEach((name) => {
+    forestState.compareLayers[name] = null;
+  });
+  ["pre", "post"].forEach((kind) => {
+    const map = forestState.compareMaps[kind];
+    if (map) {
+      map.off();
+      map.remove();
+    }
+    forestState.compareMaps[kind] = null;
+  });
+  forestState.compareSyncing = false;
+}
+
 function syncCompareMaps(sourceKind) {
-  if (forestState.compareSyncing) return;
+  if (forestState.compareSyncing || !forestState.compareOpen) return;
   const source = forestState.compareMaps[sourceKind];
   const target = forestState.compareMaps[sourceKind === "pre" ? "post" : "pre"];
   if (!source || !target) return;
   forestState.compareSyncing = true;
-  target.setView(source.getCenter(), source.getZoom(), { animate: false });
-  forestState.compareSyncing = false;
+  try {
+    target.setView(source.getCenter(), source.getZoom(), { animate: false });
+  } finally {
+    forestState.compareSyncing = false;
+  }
 }
 
 function removeCompareLayer(name) {
@@ -1298,6 +1316,21 @@ function applyVisibleRasterFilters() {
   applyCompareHansenFilter("post", overlay);
 }
 
+function layoutCompareMap(kind, map, bounds) {
+  if (!forestState.compareOpen || forestState.compareMaps[kind] !== map) return;
+  map.invalidateSize({ animate: false, pan: false });
+  if (bounds) {
+    map.fitBounds(bounds, { padding: [20, 20], animate: false });
+  }
+}
+
+function scheduleCompareMapLayout(kind, map, bounds) {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => layoutCompareMap(kind, map, bounds));
+  });
+  window.setTimeout(() => layoutCompareMap(kind, map, bounds), 260);
+}
+
 function renderCompareMap(kind, download, preview, hansenOverlay) {
   const map = ensureCompareMap(kind);
   removeCompareLayer(`${kind}Image`);
@@ -1327,13 +1360,11 @@ function renderCompareMap(kind, download, preview, hansenOverlay) {
   applyCompareImageFilter(kind, preview);
   applyCompareHansenFilter(kind, hansenOverlay);
 
-  if (preview?.bbox) {
-    map.fitBounds(bboxToBounds(preview.bbox), { padding: [20, 20], animate: false });
-  } else if (hansenOverlay?.bbox) {
-    map.fitBounds(bboxToBounds(hansenOverlay.bbox), { padding: [20, 20], animate: false });
-  }
-  window.setTimeout(() => map.invalidateSize(), 50);
-  window.setTimeout(() => map.invalidateSize(), 240);
+  const targetBounds = preview?.bbox
+    ? bboxToBounds(preview.bbox)
+    : (hansenOverlay?.bbox ? bboxToBounds(hansenOverlay.bbox) : null);
+  layoutCompareMap(kind, map, targetBounds);
+  scheduleCompareMapLayout(kind, map, targetBounds);
 }
 
 function renderCompareView() {
@@ -1391,6 +1422,7 @@ function openCompareView() {
 function closeCompareView(options = {}) {
   forestState.compareOpen = false;
   forestState.compareSclPreviews = [];
+  destroyCompareMaps();
   const compare = $("forestCompareView");
   if (compare) compare.hidden = true;
   updateWorkspaceFocus();
