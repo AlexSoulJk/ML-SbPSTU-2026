@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=multipart-bundle-1" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=map-actions-1" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -299,6 +299,48 @@
               </div>
             </section>
           </div>
+        </aside>
+        <div id="forestMapQuickActions" class="forestMapQuickActions forestOnly" aria-label="Selected sample actions">
+          <button
+            id="forestMapCompareBtn"
+            class="forestMapQuickActionButton"
+            type="button"
+            title="Compare PRE and POST imagery"
+            aria-label="Compare PRE and POST imagery"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.75" y="4.75" width="7.5" height="14.5" rx="1.7"></rect>
+              <rect x="13.75" y="4.75" width="7.5" height="14.5" rx="1.7"></rect>
+              <path d="M8.4 8.4h7.2m0 0-2-2m2 2-2 2"></path>
+              <path d="M15.6 15.6H8.4m0 0 2 2m-2-2 2-2"></path>
+            </svg>
+          </button>
+          <button
+            id="forestMapInfoBtn"
+            class="forestMapQuickActionButton"
+            type="button"
+            title="Show candidate information"
+            aria-label="Show candidate information"
+            aria-expanded="false"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M12 10.5v6"></path>
+              <circle class="forestMapInfoDot" cx="12" cy="7.4" r="0.8"></circle>
+            </svg>
+          </button>
+        </div>
+        <aside id="forestMapInfoPanel" class="forestMapInfoPanel forestOnly" hidden aria-hidden="true">
+          <header class="forestMapInfoPanelHeader">
+            <div>
+              <strong>Candidate information</strong>
+              <span>Selected point</span>
+            </div>
+            <button id="forestMapInfoCloseBtn" type="button" title="Close candidate information" aria-label="Close candidate information">×</button>
+          </header>
+          <div id="forestMapInfoContent" class="forestMapInfoContent"></div>
         </aside>
         <section id="forestDbSyncView" class="forestDbSyncView forestOnly" hidden>
           <header class="forestDbSyncHeader">
@@ -776,6 +818,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=compare-lifecycle-1"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=map-actions-2"></script>
   </body>
 </html>

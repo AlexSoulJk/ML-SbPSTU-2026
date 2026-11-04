@@ -408,6 +408,139 @@ textarea {
   pointer-events: none;
 }
 
+.forestMapQuickActions {
+  position: absolute;
+  top: 12px;
+  right: 56px;
+  z-index: 901;
+  display: flex;
+  gap: 8px;
+  transition: right 0.16s ease;
+}
+
+.mapLayerPanel:not(.collapsed) + .forestMapQuickActions {
+  right: 294px;
+}
+
+.forestMapQuickActionButton {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-color: #9bb3ad;
+  border-radius: 7px;
+  color: #385a51;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.forestMapQuickActionButton:hover:not(:disabled),
+.forestMapQuickActionButton.active {
+  border-color: var(--brand);
+  color: #fff;
+  background: var(--brand);
+}
+
+.forestMapQuickActionButton:disabled {
+  opacity: 0.42;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.forestMapQuickActionButton svg {
+  width: 21px;
+  height: 21px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.forestMapQuickActionButton .forestMapInfoDot {
+  fill: currentColor;
+  stroke: none;
+}
+
+.forestMapInfoPanel {
+  position: absolute;
+  top: 58px;
+  right: 12px;
+  z-index: 899;
+  display: grid;
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 72px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(251, 252, 248, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.forestMapInfoPanel[hidden] {
+  display: none !important;
+}
+
+.forestMapInfoPanelHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(251, 252, 248, 0.98);
+}
+
+.forestMapInfoPanelHeader > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forestMapInfoPanelHeader strong {
+  color: var(--ink);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.forestMapInfoPanelHeader span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestMapInfoPanelHeader button {
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.forestMapInfoContent {
+  padding: 10px;
+}
+
+.forestMapInfoContent .forestPointInfo {
+  border: 0;
+  background: transparent;
+}
+
+.forestMapInfoContent .forestPointInfoTitle {
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.forestMapInfoContent .forestPointInfoBody {
+  padding: 10px 0 0;
+}
+
 .mapLayerIconButton {
   display: inline-grid;
   width: 34px;

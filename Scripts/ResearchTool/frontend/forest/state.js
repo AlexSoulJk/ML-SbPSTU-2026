@@ -39,6 +39,7 @@ export const forestState = {
   includeHansenTreecover: false,
   includeBatchHansenTreecover: false,
   layerPanelCollapsed: false,
+  mapInfoOpen: false,
   debugEvents: [],
   mapDebugAttached: false,
   mapClickCandidates: [],

@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=candidate-hansen-masks-2";
+import { forestState } from "./state.js?v=map-actions-2";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 

@@ -1,5 +1,5 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=candidate-hansen-masks-2";
-import { initDataOperations } from "./data_operations.js?v=multipart-bundle-1";
+import { clearForestLayers, renderForestMap } from "./map.js?v=map-actions-2";
+import { initDataOperations } from "./data_operations.js?v=map-actions-2";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
@@ -22,7 +22,7 @@ import {
   startHansenBatch,
   startSentinelCacheDownload,
 } from "./samples.js?v=candidate-hansen-masks-2";
-import { forestState } from "./state.js?v=candidate-hansen-masks-2";
+import { forestState } from "./state.js?v=map-actions-2";
 
 function $(id) {
   return document.getElementById(id);
@@ -475,8 +475,47 @@ function renderLayerPanelState() {
   renderRasterLegends();
 }
 
+function renderMapQuickActions() {
+  const sample = forestState.selectedDetail;
+  const compareButton = $("forestMapCompareBtn");
+  const infoButton = $("forestMapInfoBtn");
+  const panel = $("forestMapInfoPanel");
+  const content = $("forestMapInfoContent");
+  if (!compareButton || !infoButton || !panel || !content) return;
+
+  if (!sample) forestState.mapInfoOpen = false;
+  const canCompare = Boolean(sample && canCompareSentinel(sample));
+  compareButton.disabled = !canCompare;
+  compareButton.title = canCompare
+    ? "Compare PRE and POST imagery"
+    : "Select a sample with PRE and POST imagery";
+  infoButton.disabled = !sample;
+  infoButton.classList.toggle("active", Boolean(sample && forestState.mapInfoOpen));
+  infoButton.setAttribute("aria-expanded", String(Boolean(sample && forestState.mapInfoOpen)));
+
+  panel.hidden = !sample || !forestState.mapInfoOpen;
+  panel.setAttribute("aria-hidden", String(panel.hidden));
+  content.innerHTML = sample
+    ? renderPointInfo(sample)
+    : `<div class="emptyState">Select a sample.</div>`;
+  $("forestSaveNameBtn")?.addEventListener("click", () => run(saveSampleName));
+}
+
+function setMapInfoOpen(open) {
+  forestState.mapInfoOpen = Boolean(open && forestState.selectedDetail);
+  if (forestState.mapInfoOpen && !forestState.layerPanelCollapsed) {
+    forestState.layerPanelCollapsed = true;
+    renderLayerPanelState();
+  }
+  renderMapQuickActions();
+}
+
 function setLayerPanelCollapsed(collapsed) {
   forestState.layerPanelCollapsed = collapsed;
+  if (!collapsed && forestState.mapInfoOpen) {
+    forestState.mapInfoOpen = false;
+    renderMapQuickActions();
+  }
   renderLayerPanelState();
   window.pipelineExplorer?.refreshMapLayout();
 }
@@ -1409,6 +1448,7 @@ function openCompareView() {
     return;
   }
   closeDbSyncView({ silent: true });
+  setMapInfoOpen(false);
   forestState.dataOperationsOpen = false;
   $("forestDataOperationsView").hidden = true;
   forestState.compareOpen = true;
@@ -2041,13 +2081,11 @@ function renderSamplesList() {
 
 function renderPointInfo(sample) {
   return `
-    <details class="forestPointInfo" open>
-      <summary>
-        <span class="forestPointInfoTitle">
-          <strong>${escapeHtml(sampleDisplayName(sample))}</strong>
-          <span>Point info</span>
-        </span>
-      </summary>
+    <article class="forestPointInfo">
+      <div class="forestPointInfoTitle">
+        <strong>${escapeHtml(sampleDisplayName(sample))}</strong>
+        <span>Point info</span>
+      </div>
       <div class="forestPointInfoBody">
         <div class="forestNamePanel">
           <label>
@@ -2067,7 +2105,7 @@ function renderPointInfo(sample) {
           <div><span>Lon</span><strong>${Number(sample.lon).toFixed(6)}</strong></div>
         </div>
       </div>
-    </details>
+    </article>
   `;
 }
 
@@ -2309,8 +2347,6 @@ function selectSampleEventFilter(sample, eventId, options = {}) {
   renderDetail();
   ensureActiveSentinelPreviewForSample(sample);
   renderSentinelDownloadsPanel();
-  const compareButton = $("forestCompareSentinelBtn");
-  if (compareButton) compareButton.disabled = !canCompareSentinel(sample);
   renderMap();
   const label = selectedEvent ? `event ${selectedEvent.event_year}` : forestState.selectedSampleEventId;
   setForestStatus(`showing Sentinel imagery for ${label}`);
@@ -2319,6 +2355,7 @@ function selectSampleEventFilter(sample, eventId, options = {}) {
 function renderDetail() {
   const host = $("forestDetails");
   const sample = forestState.selectedDetail;
+  renderMapQuickActions();
   if (!sample) {
     host.innerHTML = `<div class="emptyState">Select a sample.</div>`;
     return;
@@ -2328,7 +2365,6 @@ function renderDetail() {
   const raw = JSON.stringify(sample.raw_properties || {}, null, 2);
   const hansenBusy = Boolean(isHansenJobRunning(sample));
   host.innerHTML = `
-    ${renderPointInfo(sample)}
     ${renderSampleEvents(sample)}
     ${renderImageIdSearch(sample)}
     <article class="forestActionPanel">
@@ -2347,7 +2383,6 @@ function renderDetail() {
       <div class="forestPanelHeader">
         <h3>Sentinel-2</h3>
         <div class="forestPanelActions">
-          <button id="forestCompareSentinelBtn" type="button" ${canCompareSentinel(sample) ? "" : "disabled"}>Compare PRE/POST</button>
           <button id="forestSearchSentinelBtn" class="primary" type="button">Search Sentinel-2</button>
         </div>
       </div>
@@ -2407,7 +2442,6 @@ function renderDetail() {
     : "Unclear";
   $("forestManualValidation").value = sample.manual_validation || suggestedValidation;
   $("forestManualNotes").value = sample.manual_notes || "";
-  $("forestSaveNameBtn").addEventListener("click", () => run(saveSampleName));
   $("forestImageIdInput").addEventListener("input", (event) => {
     forestState.sentinelImageIdQuery = event.target.value;
     renderSentinelDownloadsPanel();
@@ -2445,7 +2479,6 @@ function renderDetail() {
     cancelHansenButton.addEventListener("click", () => run(cancelHansenAnalysis));
   }
   $("forestSearchSentinelBtn").addEventListener("click", () => run(runSentinelSearch));
-  $("forestCompareSentinelBtn").addEventListener("click", () => openCompareView());
   const downloadButton = $("forestDownloadSentinelBtn");
   if (downloadButton) {
     downloadButton.addEventListener("click", () => run(downloadCheckedSentinelScenes));
@@ -2635,6 +2668,7 @@ async function loadSelectedHansenTilePreview({ fit = false } = {}) {
 
 function clearSelectedSample() {
   closeCompareView({ silent: true });
+  forestState.mapInfoOpen = false;
   forestState.selectedSampleId = null;
   forestState.selectedDetail = null;
   forestState.activeSentinelPreview = null;
@@ -3178,6 +3212,11 @@ function bindEvents() {
   $("sidebarToggle").addEventListener("click", toggleSidebar);
   $("mapLayerPanelOpen").addEventListener("click", () => setLayerPanelCollapsed(false));
   $("mapLayerPanelClose").addEventListener("click", () => setLayerPanelCollapsed(true));
+  $("forestMapCompareBtn").addEventListener("click", openCompareView);
+  $("forestMapInfoBtn").addEventListener("click", () => {
+    setMapInfoOpen(!forestState.mapInfoOpen);
+  });
+  $("forestMapInfoCloseBtn").addEventListener("click", () => setMapInfoOpen(false));
   $("forestCopyDebugBtn").addEventListener("click", () => run(copyDebugEvents));
   $("forestClearDebugBtn").addEventListener("click", () => {
     forestState.debugEvents = [];
