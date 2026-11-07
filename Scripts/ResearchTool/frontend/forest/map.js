@@ -1,4 +1,4 @@
-import { forestState } from "./state.js?v=map-actions-2";
+import { forestState } from "./state.js?v=sample-inspector-9";
 
 const FALLBACK_SELECT_RADIUS_PX = 32;
 

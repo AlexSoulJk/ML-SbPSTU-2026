@@ -1,5 +1,5 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=map-actions-2";
-import { initDataOperations } from "./data_operations.js?v=map-actions-2";
+import { clearForestLayers, renderForestMap } from "./map.js?v=sample-inspector-9";
+import { initDataOperations } from "./data_operations.js?v=sample-inspector-9";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
@@ -11,7 +11,6 @@ import {
   getForestSample,
   getForestJob,
   getHansenTilePreview,
-  importForestFiles,
   listForestSamples,
   listDbSyncCandidates,
   saveManualValidation,
@@ -19,10 +18,9 @@ import {
   saveSampleDisplayName,
   saveSentinelReview,
   searchSentinel,
-  startHansenBatch,
   startSentinelCacheDownload,
 } from "./samples.js?v=candidate-hansen-masks-2";
-import { forestState } from "./state.js?v=map-actions-2";
+import { forestState } from "./state.js?v=sample-inspector-9";
 
 function $(id) {
   return document.getElementById(id);
@@ -98,17 +96,15 @@ async function copyDebugEvents() {
 
 function currentFilters() {
   return {
-    q: $("forestQueryInput").value.trim(),
     id_q: $("forestIdInput").value.trim(),
     driver: $("forestDriverInput").value.trim(),
-    region: $("forestRegionInput").value.trim(),
     manual_validation: $("forestValidationFilter").value,
     sentinel_availability: $("forestSentinelAvailabilityFilter").value,
   };
 }
 
 function nearestN() {
-  return Number($("forestNearestInput").value) || 25;
+  return 25;
 }
 
 function sampleDisplayName(sample) {
@@ -478,17 +474,24 @@ function renderLayerPanelState() {
 function renderMapQuickActions() {
   const sample = forestState.selectedDetail;
   const compareButton = $("forestMapCompareBtn");
+  const inspectorButton = $("forestMapInspectorBtn");
   const infoButton = $("forestMapInfoBtn");
   const panel = $("forestMapInfoPanel");
   const content = $("forestMapInfoContent");
-  if (!compareButton || !infoButton || !panel || !content) return;
+  if (!compareButton || !inspectorButton || !infoButton || !panel || !content) return;
 
-  if (!sample) forestState.mapInfoOpen = false;
+  if (!sample) {
+    forestState.mapInfoOpen = false;
+    forestState.sampleInspectorOpen = false;
+  }
   const canCompare = Boolean(sample && canCompareSentinel(sample));
   compareButton.disabled = !canCompare;
   compareButton.title = canCompare
     ? "Compare PRE and POST imagery"
     : "Select a sample with PRE and POST imagery";
+  inspectorButton.disabled = !sample;
+  inspectorButton.classList.toggle("active", Boolean(sample && forestState.sampleInspectorOpen));
+  inspectorButton.setAttribute("aria-expanded", String(Boolean(sample && forestState.sampleInspectorOpen)));
   infoButton.disabled = !sample;
   infoButton.classList.toggle("active", Boolean(sample && forestState.mapInfoOpen));
   infoButton.setAttribute("aria-expanded", String(Boolean(sample && forestState.mapInfoOpen)));
@@ -499,25 +502,93 @@ function renderMapQuickActions() {
     ? renderPointInfo(sample)
     : `<div class="emptyState">Select a sample.</div>`;
   $("forestSaveNameBtn")?.addEventListener("click", () => run(saveSampleName));
+  renderSampleInspector();
 }
 
-function setMapInfoOpen(open) {
-  forestState.mapInfoOpen = Boolean(open && forestState.selectedDetail);
-  if (forestState.mapInfoOpen && !forestState.layerPanelCollapsed) {
+function renderSampleInspector() {
+  const sample = forestState.selectedDetail;
+  const panel = $("forestSampleInspector");
+  const workspace = document.querySelector(".workspace");
+  if (!panel || !workspace) return;
+
+  const open = Boolean(sample && forestState.sampleInspectorOpen);
+  panel.hidden = !open;
+  panel.setAttribute("aria-hidden", String(!open));
+  workspace.classList.toggle("sampleInspectorOpen", open);
+  if (!open) return;
+
+  const events = sample.events || [];
+  const downloads = sample.sentinel?.downloads || [];
+  $("forestSampleInspectorTitle").textContent = sampleDisplayName(sample);
+  $("forestSampleInspectorEventsMeta").textContent = events.length
+    ? `${events.length}${sample.has_multiple_events ? " / multiple" : ""}`
+    : "No derived events";
+  $("forestSampleInspectorImagesMeta").textContent = `${downloads.length} downloaded`;
+  $("forestSampleInspectorEvents").innerHTML = renderSampleEvents(sample, { showHeader: false });
+  $("forestSampleInspectorSearch").innerHTML = renderSentinelSearchPanel(sample);
+  $("forestSampleInspectorImageFilter").innerHTML = renderImageIdSearch(sample);
+  $("forestSentinelDownloads").innerHTML = renderSentinelDownloads(sample);
+  bindSampleInspectorControls();
+}
+
+function refreshMapAfterWorkspaceResize() {
+  window.requestAnimationFrame(() => window.pipelineExplorer?.refreshMapLayout());
+  window.setTimeout(() => window.pipelineExplorer?.refreshMapLayout(), 180);
+}
+
+function renderDetailDrawerState() {
+  const workspace = document.querySelector(".workspace");
+  const drawer = document.querySelector(".drawer");
+  const forestDrawer = $("forestDrawer");
+  const button = $("forestDrawerToggleBtn");
+  if (!workspace || !drawer || !forestDrawer || !button) return;
+
+  const collapsed = forestState.mode === "forest" && forestState.detailDrawerCollapsed;
+  workspace.classList.toggle("forestDrawerCollapsed", collapsed);
+  drawer.classList.toggle("forestDrawerCollapsed", collapsed);
+  forestDrawer.classList.toggle("collapsed", collapsed);
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.title = collapsed ? "Expand sample workspace" : "Collapse sample workspace";
+  button.setAttribute("aria-label", button.title);
+}
+
+function setDetailDrawerCollapsed(collapsed) {
+  forestState.detailDrawerCollapsed = Boolean(collapsed);
+  renderDetailDrawerState();
+  refreshMapAfterWorkspaceResize();
+}
+
+function setSampleInspectorOpen(open) {
+  forestState.sampleInspectorOpen = Boolean(open && forestState.selectedDetail);
+  if (forestState.sampleInspectorOpen) {
+    forestState.mapInfoOpen = false;
     forestState.layerPanelCollapsed = true;
     renderLayerPanelState();
   }
   renderMapQuickActions();
+  refreshMapAfterWorkspaceResize();
+}
+
+function setMapInfoOpen(open) {
+  forestState.mapInfoOpen = Boolean(open && forestState.selectedDetail);
+  if (forestState.mapInfoOpen) {
+    forestState.sampleInspectorOpen = false;
+    forestState.layerPanelCollapsed = true;
+    renderLayerPanelState();
+  }
+  renderMapQuickActions();
+  refreshMapAfterWorkspaceResize();
 }
 
 function setLayerPanelCollapsed(collapsed) {
   forestState.layerPanelCollapsed = collapsed;
-  if (!collapsed && forestState.mapInfoOpen) {
+  if (!collapsed && (forestState.mapInfoOpen || forestState.sampleInspectorOpen)) {
     forestState.mapInfoOpen = false;
+    forestState.sampleInspectorOpen = false;
     renderMapQuickActions();
   }
   renderLayerPanelState();
-  window.pipelineExplorer?.refreshMapLayout();
+  refreshMapAfterWorkspaceResize();
 }
 
 function renderCompareLayerPanelState() {
@@ -594,7 +665,7 @@ function enhanceSidebarPanels() {
       title?.replaceWith(titleButton);
     }
 
-    titleButton.setAttribute("aria-expanded", "true");
+    titleButton.setAttribute("aria-expanded", String(!panel.classList.contains("collapsed")));
     titleButton.addEventListener("click", () => {
       const collapsed = panel.classList.toggle("collapsed");
       titleButton.setAttribute("aria-expanded", String(!collapsed));
@@ -606,8 +677,7 @@ function enhanceSidebarPanels() {
 async function setMode(mode) {
   document.body.dataset.mode = mode;
   forestState.mode = mode;
-  $("forestModeBtn").classList.toggle("active", mode === "forest");
-  $("pipelineModeBtn").classList.toggle("active", mode === "pipeline");
+  renderDetailDrawerState();
 
   if (mode === "pipeline") {
     closeDbSyncView();
@@ -645,10 +715,20 @@ function sampleCard(sample, options = {}) {
     .filter(Boolean)
     .join(" ");
   card.innerHTML = `
-    <strong>${escapeHtml(displayName)} ${sample.is_saved ? '<i class="forestSavedShape" aria-label="saved"></i>' : ""}</strong>
-    <span>${escapeHtml(sample.driver_primary || "unknown")} / ${escapeHtml(sample.confidence_primary || "n/a")}</span>
-    ${sample.manual_validation ? `<span>${escapeHtml(sample.manual_validation)}</span>` : ""}
-    ${sample.has_multiple_events ? `<span class="forestSampleBadge multiEvent">multi-event</span>` : ""}
+    <span class="forestSampleCardTitle">
+      <strong title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</strong>
+      ${sample.is_saved ? '<i class="forestSavedShape" aria-label="saved" title="Saved sample"></i>' : ""}
+    </span>
+    <span class="forestSampleCardMeta">
+      <span><small>Driver</small><b>${escapeHtml(sample.driver_primary || "unknown")}</b></span>
+      <span><small>Confidence</small><b>${escapeHtml(sample.confidence_primary || "n/a")}</b></span>
+    </span>
+    ${(sample.manual_validation || sample.has_multiple_events) ? `
+      <span class="forestSampleCardFlags">
+        ${sample.manual_validation ? `<span class="forestSampleBadge">${escapeHtml(sample.manual_validation)}</span>` : ""}
+        ${sample.has_multiple_events ? `<span class="forestSampleBadge multiEvent">multi-event</span>` : ""}
+      </span>
+    ` : ""}
     ${hansenRunning ? `<span class="forestSampleCardJob"><i class="forestSpinner" aria-hidden="true"></i>${escapeHtml(hansenStageLabel(forestState.hansenJob.stage))}</span>` : ""}
   `;
   card.addEventListener("click", () => run(() => selectSample(sample.sample_id, { fit: true })));
@@ -814,6 +894,14 @@ function sentinelReviewReasonSummary(review) {
     .join(", ")}`;
 }
 
+function sentinelReviewReasonSelectionLabel(review) {
+  const reasonCodes = sentinelReviewReasonCodes(review);
+  if (!reasonCodes.length) return "Select exclusion reasons";
+  const labels = reasonCodes.map(sentinelReviewReasonLabel);
+  if (labels.length <= 2) return labels.join(", ");
+  return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
+}
+
 function baseSentinelReview(download) {
   const review = download.review || {
     is_excluded: false,
@@ -859,39 +947,40 @@ function sentinelReviewReasonChecks(selectedReasons, downloadId, saving) {
 }
 
 function renderSentinelReviewPanel(download, review, options = {}) {
-  if (!review.is_excluded) return "";
-
   const downloadId = download.download_id || "";
+  if (!forestState.sentinelReviewEditorIds.has(downloadId)) return "";
   const reasonCodes = sentinelReviewReasonCodes(review);
-  const reasonText = review.reason_text || "";
+  const reasonText = sentinelReviewReasonText(review, "OTHER") || "";
   const saving = Boolean(options.saving);
-  const hasDraft = forestState.sentinelReviewDrafts.has(downloadId);
   const isOther = reasonCodes.includes("OTHER");
   const reasonSummary = sentinelReviewReasonSummary({ ...review, reason_codes: reasonCodes });
 
   return `
-    <div class="forestSentinelReviewPanel">
-      <div class="forestSentinelReasonTitle">Reasons</div>
-      ${sentinelReviewReasonChecks(reasonCodes, downloadId, saving)}
-      ${
-        isOther
-          ? `<label>
-              Other reason
-              <input
-                class="forestSentinelOtherReasonInput"
-                type="text"
-                data-download-id="${escapeHtml(downloadId)}"
-                value="${escapeHtml(reasonText)}"
-                maxlength="500"
-                placeholder="What is wrong with this image?"
-                ${saving ? "disabled" : ""}
-              />
-            </label>`
-          : ""
-      }
+    <div class="forestSentinelReviewPanel" data-sentinel-review-editor="${escapeHtml(downloadId)}">
+      <details class="forestSentinelReasonCombo" ${reasonCodes.length ? "" : "open"}>
+        <summary>
+          <span class="forestSentinelReasonSelection">${escapeHtml(sentinelReviewReasonSelectionLabel(review))}</span>
+          <span class="forestSentinelReasonCount">${reasonCodes.length ? `${reasonCodes.length} selected` : "required"}</span>
+        </summary>
+        <div class="forestSentinelReasonMenu">
+          ${sentinelReviewReasonChecks(reasonCodes, downloadId, saving)}
+        </div>
+      </details>
+      <label class="forestSentinelOtherReasonField" ${isOther ? "" : "hidden"}>
+        Other reason
+        <input
+          class="forestSentinelOtherReasonInput"
+          type="text"
+          data-download-id="${escapeHtml(downloadId)}"
+          value="${escapeHtml(reasonText)}"
+          maxlength="500"
+          placeholder="What is wrong with this image?"
+          ${saving ? "disabled" : ""}
+        />
+      </label>
       <div class="forestSentinelReviewActions">
-        <span class="meta">${escapeHtml(reasonSummary)}</span>
-        ${hasDraft ? `<button class="forestSentinelReviewCancelBtn" type="button" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>Cancel</button>` : ""}
+        <span class="meta forestSentinelReasonSummary">${escapeHtml(reasonSummary)}</span>
+        <button class="forestSentinelReviewCancelBtn" type="button" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>Cancel</button>
         <button class="forestSentinelReviewSaveBtn primary" type="button" data-download-id="${escapeHtml(downloadId)}" ${saving ? "disabled" : ""}>
           ${saving ? "Saving" : "Save"}
         </button>
@@ -967,10 +1056,15 @@ function renderSentinelDownloadRow(download) {
   const expanded = forestState.sentinelExpandedDownloadKeys.has(downloadKey);
   const review = effectiveSentinelReview(download);
   const excluded = Boolean(review.is_excluded);
+  const persistedExcluded = Boolean(download.review?.is_excluded);
   const hasDraft = forestState.sentinelReviewDrafts.has(download.download_id);
+  const editorOpen = forestState.sentinelReviewEditorIds.has(download.download_id);
   const saving = forestState.sentinelReviewSavingIds.has(download.download_id);
   const badgeText = saving ? "Saving" : hasDraft ? "Draft" : excluded ? "Excluded" : "Used";
   const badgeClass = saving ? "saving" : hasDraft ? "draft" : excluded ? "excluded" : "used";
+  const reasonSummary = persistedExcluded
+    ? sentinelReviewReasonSelectionLabel(baseSentinelReview(download))
+    : "Included in analysis";
   if (!primary) {
     return `<div class="forestPreviewEmpty">${escapeHtml(download.datetime?.slice(0, 10) || "no date")}</div>`;
   }
@@ -979,17 +1073,19 @@ function renderSentinelDownloadRow(download) {
   return `
     <article class="forestPreviewRow ${excluded ? "excluded" : ""}">
       <div class="forestPreviewReviewBar">
-        <label class="forestSentinelReviewCheck">
-          <input
-            class="forestSentinelExcludeCheck"
-            type="checkbox"
-            data-download-id="${escapeHtml(download.download_id || "")}"
-            ${excluded ? "checked" : ""}
-            ${saving ? "disabled" : ""}
-          />
-          <span>Exclude from use</span>
-        </label>
-        <span class="forestPreviewBadge ${badgeClass}">${escapeHtml(badgeText)}</span>
+        <span class="forestPreviewReviewState">
+          <span class="forestPreviewBadge ${badgeClass}">${escapeHtml(badgeText)}</span>
+          <span class="forestPreviewReasonCaption">${escapeHtml(reasonSummary)}</span>
+        </span>
+        <span class="forestPreviewReviewButtons">
+          ${!editorOpen && persistedExcluded ? `
+            <button class="forestSentinelReviewEditBtn" type="button" data-download-id="${escapeHtml(download.download_id || "")}" ${saving ? "disabled" : ""}>Edit exclusion</button>
+            <button class="forestSentinelRestoreBtn" type="button" data-download-id="${escapeHtml(download.download_id || "")}" ${saving ? "disabled" : ""}>Use image</button>
+          ` : ""}
+          ${!editorOpen && !persistedExcluded ? `
+            <button class="forestSentinelExcludeBtn" type="button" data-download-id="${escapeHtml(download.download_id || "")}" ${saving ? "disabled" : ""}>Exclude image</button>
+          ` : ""}
+        </span>
       </div>
       ${renderSentinelReviewPanel(download, review, { saving })}
       ${previewButton({
@@ -1448,6 +1544,7 @@ function openCompareView() {
     return;
   }
   closeDbSyncView({ silent: true });
+  setSampleInspectorOpen(false);
   setMapInfoOpen(false);
   forestState.dataOperationsOpen = false;
   $("forestDataOperationsView").hidden = true;
@@ -1824,6 +1921,8 @@ async function loadDbSyncCandidates() {
 
 async function openDbSyncView() {
   closeCompareView({ silent: true });
+  setSampleInspectorOpen(false);
+  setMapInfoOpen(false);
   forestState.dataOperationsOpen = false;
   $("forestDataOperationsView").hidden = true;
   forestState.dbSyncOpen = true;
@@ -1989,23 +2088,6 @@ function defaultSelectedSceneKeys(result) {
   return searchedScenes({ sentinelSearch: result })
     .slice(0, 2)
     .map((scene) => scene.key);
-}
-
-function renderBatchStatus(job = null) {
-  const host = $("forestBatchStatus");
-  const cancelButton = $("forestCancelBatchBtn");
-  if (!host || !cancelButton) return;
-
-  if (!job) {
-    host.textContent = "no batch job";
-    cancelButton.disabled = true;
-    return;
-  }
-
-  const total = Number(job.total || 0);
-  const done = Number(job.done || 0);
-  host.textContent = `${job.status}: ${done}/${total}${job.message ? ` / ${job.message}` : ""}`;
-  cancelButton.disabled = !["queued", "running", "cancel_requested"].includes(job.status);
 }
 
 function isTerminalJobStatus(status) {
@@ -2176,16 +2258,19 @@ function renderEventFilterRow({ value, title, detail, trailing, event = null }) 
   `;
 }
 
-function renderSampleEvents(sample) {
+function renderSampleEvents(sample, options = {}) {
   const events = sample.events || [];
   const downloads = sample.sentinel?.downloads || [];
   const unassigned = unassignedSentinelDownloads(sample);
+  const showHeader = options.showHeader !== false;
   return `
     <article class="forestSampleEvents">
-      <div class="forestPanelHeader">
-        <h3>Events</h3>
-        <span class="meta">${events.length ? `${events.length}${sample.has_multiple_events ? " / multiple" : ""}` : "No derived Hansen events"}</span>
-      </div>
+      ${showHeader ? `
+        <div class="forestPanelHeader">
+          <h3>Events</h3>
+          <span class="meta">${events.length ? `${events.length}${sample.has_multiple_events ? " / multiple" : ""}` : "No derived Hansen events"}</span>
+        </div>
+      ` : ""}
       <div class="forestEventRows">
         ${renderEventFilterRow({
           value: "all",
@@ -2219,9 +2304,7 @@ function renderEventReviewPanel(sample) {
   const event = (sample.events || []).find(
     (row) => row.event_id === forestState.selectedSampleEventId,
   );
-  if (!event) {
-    return `<div id="forestEventReviewPanel" class="forestEventReviewPanel meta">Select one event to review it or inspect model predictions.</div>`;
-  }
+  if (!event) return "";
   const review = event.review || {};
   const latestModelLabels = (review.labels || [])
     .filter((row) => row.source_type === "MODEL")
@@ -2291,6 +2374,39 @@ function sentinelEventOptions(sample) {
       ${escapeHtml(sampleEventLabel(event))}
     </option>
   `).join("");
+}
+
+function renderSentinelSearchPanel(sample) {
+  return `
+    <div class="forestInspectorSearchControls">
+      <label>
+        Event
+        <select id="forestSentinelEventSelect">
+          ${sentinelEventOptions(sample)}
+        </select>
+      </label>
+      <label>
+        Event year
+        <input id="forestSentinelYearInput" type="number" min="2001" max="2026" value="${escapeHtml(selectedSentinelSearchEvent(sample)?.event_year || sample.hansen?.event_year || sample.source_event_year || "")}" />
+      </label>
+      <label>
+        Season
+        <select id="forestSeasonPreset">
+          <option value="full_snow_free">full snow-free</option>
+          <option value="spring">spring</option>
+          <option value="early_summer">early summer</option>
+          <option value="late_summer">late summer</option>
+          <option value="autumn">autumn</option>
+        </select>
+      </label>
+      <label>
+        Max cloud
+        <input id="forestMaxCloudInput" type="number" min="0" max="100" value="30" />
+      </label>
+      <button id="forestSearchSentinelBtn" class="primary" type="button">Search Sentinel-2</button>
+    </div>
+    <div id="forestSentinelResults">${renderSentinelResults(sample)}</div>
+  `;
 }
 
 function sentinelDownloadMeta(sample) {
@@ -2365,56 +2481,24 @@ function renderDetail() {
   const raw = JSON.stringify(sample.raw_properties || {}, null, 2);
   const hansenBusy = Boolean(isHansenJobRunning(sample));
   host.innerHTML = `
-    ${renderSampleEvents(sample)}
-    ${renderImageIdSearch(sample)}
-    <article class="forestActionPanel">
-      <div class="forestPanelHeader">
-        <h3>Hansen</h3>
-        <button id="forestAnalyzeHansenBtn" class="primary" type="button" ${hansenBusy ? "disabled" : ""}>Analyze Hansen</button>
-      </div>
-      <label class="toggle">
-        <input id="forestHansenTreecoverInput" type="checkbox" ${forestState.includeHansenTreecover ? "checked" : ""} ${hansenBusy ? "disabled" : ""} />
-        <span>treecover 2000</span>
-      </label>
-      ${renderHansenJobStatus(sample)}
-      ${renderHansenSummary(sample)}
-    </article>
-    <article class="forestActionPanel">
-      <div class="forestPanelHeader">
-        <h3>Sentinel-2</h3>
-        <div class="forestPanelActions">
-          <button id="forestSearchSentinelBtn" class="primary" type="button">Search Sentinel-2</button>
+    <details id="forestHansenTools" class="forestActionPanel forestHansenTools" ${hansenBusy || forestState.hansenToolsOpen ? "open" : ""}>
+      <summary>
+        <strong>Hansen tools</strong>
+        <span>${sample.hansen ? `${escapeHtml(statusLabel(sample.hansen.status))} / ${escapeHtml(sample.hansen.event_year || "year n/a")}` : "not analyzed"}</span>
+      </summary>
+      <div class="forestHansenToolsBody">
+        <div class="forestPanelHeader">
+          <span class="meta">Recompute Hansen analysis and optional treecover mask for this sample.</span>
+          <button id="forestAnalyzeHansenBtn" class="primary" type="button" ${hansenBusy ? "disabled" : ""}>Analyze Hansen</button>
         </div>
+        <label class="toggle">
+          <input id="forestHansenTreecoverInput" type="checkbox" ${forestState.includeHansenTreecover ? "checked" : ""} ${hansenBusy ? "disabled" : ""} />
+          <span>treecover 2000</span>
+        </label>
+        ${renderHansenJobStatus(sample)}
+        ${renderHansenSummary(sample)}
       </div>
-      <div class="forestSentinelControls">
-        <label>
-          Event
-          <select id="forestSentinelEventSelect">
-            ${sentinelEventOptions(sample)}
-          </select>
-        </label>
-        <label>
-          Event year
-          <input id="forestSentinelYearInput" type="number" min="2001" max="2026" value="${escapeHtml(selectedSentinelSearchEvent(sample)?.event_year || sample.hansen?.event_year || sample.source_event_year || "")}" />
-        </label>
-        <label>
-          Season
-          <select id="forestSeasonPreset">
-            <option value="full_snow_free">full snow-free</option>
-            <option value="spring">spring</option>
-            <option value="early_summer">early summer</option>
-            <option value="late_summer">late summer</option>
-            <option value="autumn">autumn</option>
-          </select>
-        </label>
-        <label>
-          Max cloud
-          <input id="forestMaxCloudInput" type="number" min="0" max="100" value="30" />
-        </label>
-      </div>
-      <div id="forestSentinelResults">${renderSentinelResults(sample)}</div>
-      <div id="forestSentinelDownloads">${renderSentinelDownloads(sample)}</div>
-    </article>
+    </details>
     <article class="forestValidation">
       <label>
         Manual validation
@@ -2442,74 +2526,75 @@ function renderDetail() {
     : "Unclear";
   $("forestManualValidation").value = sample.manual_validation || suggestedValidation;
   $("forestManualNotes").value = sample.manual_notes || "";
-  $("forestImageIdInput").addEventListener("input", (event) => {
-    forestState.sentinelImageIdQuery = event.target.value;
-    renderSentinelDownloadsPanel();
-  });
-  document.querySelectorAll(".forestEventFilterInput").forEach((input) => {
-    input.addEventListener("change", () => {
-      if (input.checked) selectSampleEventFilter(sample, input.value);
-    });
-  });
-  $("forestEventReviewSaveBtn")?.addEventListener("click", () => run(saveCurrentEventReview));
-  document.querySelectorAll("[data-event-model-label-id]").forEach((button) => {
-    button.addEventListener("click", () => run(() => saveCurrentEventReview({
-      basedOnLabelId: button.dataset.eventModelLabelId,
-      acceptedLabel: button.dataset.eventModelLabel,
-    })));
+  $("forestHansenTools")?.addEventListener("toggle", (event) => {
+    forestState.hansenToolsOpen = event.currentTarget.open;
   });
   $("forestHansenTreecoverInput").addEventListener("change", (event) => {
     forestState.includeHansenTreecover = event.target.checked;
   });
-  const sentinelEventSelect = $("forestSentinelEventSelect");
-  if (sentinelEventSelect) {
-    sentinelEventSelect.addEventListener("change", () => {
-      const selectedEvent = (sample.events || []).find(
-        (event) => event.event_id === sentinelEventSelect.value,
-      );
-      if (selectedEvent) {
-        $("forestSentinelYearInput").value = selectedEvent.event_year;
-        selectSampleEventFilter(sample, selectedEvent.event_id, { syncSearch: false });
-      }
-    });
-  }
   $("forestAnalyzeHansenBtn").addEventListener("click", () => run(runHansenAnalysis));
   const cancelHansenButton = $("forestCancelHansenBtn");
   if (cancelHansenButton) {
     cancelHansenButton.addEventListener("click", () => run(cancelHansenAnalysis));
   }
-  $("forestSearchSentinelBtn").addEventListener("click", () => run(runSentinelSearch));
-  const downloadButton = $("forestDownloadSentinelBtn");
-  if (downloadButton) {
-    downloadButton.addEventListener("click", () => run(downloadCheckedSentinelScenes));
-  }
-  const selectAllButton = $("forestSelectAllScenesBtn");
-  if (selectAllButton) {
-    selectAllButton.addEventListener("click", () => {
-      searchedScenes(sample).forEach((scene) => forestState.sentinelSelectedSceneKeys.add(scene.key));
-      renderDetail();
-      setForestStatus("all Sentinel scenes checked");
-    });
-  }
-  const clearScenesButton = $("forestClearScenesBtn");
-  if (clearScenesButton) {
-    clearScenesButton.addEventListener("click", () => {
-      forestState.sentinelSelectedSceneKeys.clear();
-      renderDetail();
-      setForestStatus("Sentinel scene checks cleared");
-    });
-  }
-  document.querySelectorAll(".forestSceneCheck").forEach((checkbox) => {
-    checkbox.addEventListener("change", (event) => {
-      if (event.target.checked) {
-        forestState.sentinelSelectedSceneKeys.add(event.target.dataset.sceneKey);
-      } else {
-        forestState.sentinelSelectedSceneKeys.delete(event.target.dataset.sceneKey);
-      }
+  $("forestSaveManualBtn").addEventListener("click", () => run(saveValidation));
+}
+
+function bindSampleInspectorControls() {
+  const sample = forestState.selectedDetail;
+  if (!sample || !forestState.sampleInspectorOpen) return;
+
+  bindSentinelSearchControls(sample);
+  $("forestImageIdInput")?.addEventListener("input", (event) => {
+    forestState.sentinelImageIdQuery = event.target.value;
+    renderSentinelDownloadsPanel();
+  });
+  document.querySelectorAll("#forestSampleInspector .forestEventFilterInput").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) selectSampleEventFilter(sample, input.value);
     });
   });
+  $("forestEventReviewSaveBtn")?.addEventListener("click", () => run(saveCurrentEventReview));
+  document.querySelectorAll("#forestSampleInspector [data-event-model-label-id]").forEach((button) => {
+    button.addEventListener("click", () => run(() => saveCurrentEventReview({
+      basedOnLabelId: button.dataset.eventModelLabelId,
+      acceptedLabel: button.dataset.eventModelLabel,
+    })));
+  });
   bindSentinelDownloadControls();
-  $("forestSaveManualBtn").addEventListener("click", () => run(saveValidation));
+}
+
+function bindSentinelSearchControls(sample) {
+  const sentinelEventSelect = $("forestSentinelEventSelect");
+  sentinelEventSelect?.addEventListener("change", () => {
+    const selectedEvent = (sample.events || []).find(
+      (event) => event.event_id === sentinelEventSelect.value,
+    );
+    if (!selectedEvent) return;
+    if ($("forestSentinelYearInput")) {
+      $("forestSentinelYearInput").value = selectedEvent.event_year;
+    }
+    selectSampleEventFilter(sample, selectedEvent.event_id, { syncSearch: false });
+  });
+  $("forestSearchSentinelBtn")?.addEventListener("click", () => run(runSentinelSearch));
+  $("forestDownloadSentinelBtn")?.addEventListener("click", () => run(downloadCheckedSentinelScenes));
+  $("forestSelectAllScenesBtn")?.addEventListener("click", () => {
+    searchedScenes(sample).forEach((scene) => forestState.sentinelSelectedSceneKeys.add(scene.key));
+    renderDetail();
+    setForestStatus("all Sentinel scenes checked");
+  });
+  $("forestClearScenesBtn")?.addEventListener("click", () => {
+    forestState.sentinelSelectedSceneKeys.clear();
+    renderDetail();
+    setForestStatus("Sentinel scene checks cleared");
+  });
+  document.querySelectorAll("#forestSampleInspector .forestSceneCheck").forEach((checkbox) => {
+    checkbox.addEventListener("change", (event) => {
+      const key = event.target.dataset.sceneKey;
+      if (event.target.checked) forestState.sentinelSelectedSceneKeys.add(key);
+      else forestState.sentinelSelectedSceneKeys.delete(key);
+    });
+  });
 }
 
 function bindSentinelDownloadControls() {
@@ -2548,9 +2633,17 @@ function bindSentinelDownloadControls() {
       setForestStatus(`showing Sentinel ${sentinelViewLabel(preview.view)}`);
     });
   });
-  document.querySelectorAll(".forestSentinelExcludeCheck").forEach((checkbox) => {
-    checkbox.addEventListener("click", (event) => event.stopPropagation());
-    checkbox.addEventListener("change", (event) => run(() => toggleSentinelReview(event)));
+  document.querySelectorAll(".forestSentinelExcludeBtn, .forestSentinelReviewEditBtn").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openSentinelReviewEditor(button.dataset.downloadId);
+    });
+  });
+  document.querySelectorAll(".forestSentinelRestoreBtn").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      run(() => restoreSentinelReview(button.dataset.downloadId));
+    });
   });
   document.querySelectorAll(".forestSentinelReasonCheck").forEach((checkbox) => {
     checkbox.addEventListener("click", (event) => event.stopPropagation());
@@ -2669,10 +2762,14 @@ async function loadSelectedHansenTilePreview({ fit = false } = {}) {
 function clearSelectedSample() {
   closeCompareView({ silent: true });
   forestState.mapInfoOpen = false;
+  forestState.sampleInspectorOpen = false;
   forestState.selectedSampleId = null;
   forestState.selectedDetail = null;
   forestState.activeSentinelPreview = null;
   forestState.sentinelImageIdQuery = "";
+  forestState.sentinelReviewDrafts.clear();
+  forestState.sentinelReviewEditorIds.clear();
+  forestState.sentinelReviewSavingIds.clear();
   forestState.selectedSampleEventId = "all";
   forestState.nearest = [];
   resetHansenTilePreview();
@@ -2720,6 +2817,9 @@ async function selectSample(sampleId, options = {}) {
   if (forestState.selectedSampleId !== sampleId) {
     closeCompareView({ silent: true });
     forestState.sentinelImageIdQuery = "";
+    forestState.sentinelReviewDrafts.clear();
+    forestState.sentinelReviewEditorIds.clear();
+    forestState.sentinelReviewSavingIds.clear();
     forestState.selectedSampleEventId = "all";
     forestState.comparePreDownloadId = null;
     forestState.comparePostDownloadId = null;
@@ -2760,6 +2860,7 @@ async function refreshForestData() {
 
 async function runHansenAnalysis() {
   if (!forestState.selectedSampleId) return;
+  forestState.hansenToolsOpen = true;
   const includeTreecover = Boolean($("forestHansenTreecoverInput")?.checked);
   forestState.includeHansenTreecover = includeTreecover;
   setForestStatus("starting Hansen analysis");
@@ -2900,6 +3001,40 @@ function setSentinelReviewDraft(downloadId, patch = {}) {
   return draft;
 }
 
+function openSentinelReviewEditor(downloadId) {
+  if (!downloadId || !forestState.selectedSampleId) return;
+  const download = findSentinelDownload(downloadId);
+  if (!download) return;
+  forestState.sentinelReviewEditorIds.add(downloadId);
+  setSentinelReviewDraft(downloadId, { is_excluded: true });
+  renderSentinelDownloadsPanel();
+  window.requestAnimationFrame(() => {
+    const editor = [...document.querySelectorAll("[data-sentinel-review-editor]")].find(
+      (element) => element.dataset.sentinelReviewEditor === downloadId,
+    );
+    editor?.scrollIntoView({ block: "nearest" });
+  });
+  setForestStatus(download.review?.is_excluded
+    ? "editing Sentinel exclusion"
+    : "choose Sentinel exclusion reasons");
+}
+
+function updateSentinelReviewEditorPresentation(downloadId, review) {
+  const editor = [...document.querySelectorAll("[data-sentinel-review-editor]")].find(
+    (element) => element.dataset.sentinelReviewEditor === downloadId,
+  );
+  if (!editor) return;
+  const reasonCodes = sentinelReviewReasonCodes(review);
+  const selection = editor.querySelector(".forestSentinelReasonSelection");
+  const count = editor.querySelector(".forestSentinelReasonCount");
+  const summary = editor.querySelector(".forestSentinelReasonSummary");
+  const otherField = editor.querySelector(".forestSentinelOtherReasonField");
+  if (selection) selection.textContent = sentinelReviewReasonSelectionLabel(review);
+  if (count) count.textContent = reasonCodes.length ? `${reasonCodes.length} selected` : "required";
+  if (summary) summary.textContent = sentinelReviewReasonSummary(review);
+  if (otherField) otherField.hidden = !reasonCodes.includes("OTHER");
+}
+
 function updateSentinelReviewReason(event) {
   const checkbox = event.target;
   const downloadId = checkbox.dataset.downloadId;
@@ -2917,7 +3052,7 @@ function updateSentinelReviewReason(event) {
     reason_code: nextReasonCodes[0] || "",
     reason_text: nextReasonCodes.includes("OTHER") ? current.reason_text || "" : "",
   });
-  renderSentinelDownloadsPanel();
+  if (draft) updateSentinelReviewEditorPresentation(downloadId, draft);
   setForestStatus(draft?.reason_codes?.length ? "Sentinel review reasons selected" : "choose Sentinel review reasons");
 }
 
@@ -2928,16 +3063,18 @@ function updateSentinelReviewOtherText(event) {
     ...sentinelReviewReasonCodes(effectiveSentinelReview(download)),
     "OTHER",
   ]);
-  setSentinelReviewDraft(event.target.dataset.downloadId, {
+  const draft = setSentinelReviewDraft(event.target.dataset.downloadId, {
     reason_codes: reasonCodes,
     reason_code: reasonCodes[0] || "OTHER",
     reason_text: event.target.value,
   });
+  if (draft) updateSentinelReviewEditorPresentation(event.target.dataset.downloadId, draft);
 }
 
 function cancelSentinelReviewDraft(downloadId) {
   if (!downloadId) return;
   forestState.sentinelReviewDrafts.delete(downloadId);
+  forestState.sentinelReviewEditorIds.delete(downloadId);
   renderSentinelDownloadsPanel();
   setForestStatus("Sentinel review draft cancelled");
 }
@@ -2955,6 +3092,7 @@ async function refreshSelectedSampleAfterSentinelReview(previousSearch) {
 async function restoreSentinelReview(downloadId) {
   const previousSearch = forestState.selectedDetail?.sentinelSearch || null;
   forestState.sentinelReviewDrafts.delete(downloadId);
+  forestState.sentinelReviewEditorIds.delete(downloadId);
   forestState.sentinelReviewSavingIds.add(downloadId);
   renderSentinelDownloadsPanel();
   setForestStatus("restoring Sentinel scene");
@@ -2978,31 +3116,6 @@ async function restoreSentinelReview(downloadId) {
       renderSentinelDownloadsPanel();
     }
   }
-}
-
-async function toggleSentinelReview(event) {
-  const checkbox = event.target;
-  const downloadId = checkbox.dataset.downloadId;
-  if (!downloadId || !forestState.selectedSampleId) return;
-
-  const download = findSentinelDownload(downloadId);
-  if (!download) return;
-
-  if (checkbox.checked) {
-    setSentinelReviewDraft(downloadId, { is_excluded: true });
-    renderSentinelDownloadsPanel();
-    setForestStatus("choose Sentinel exclusion reason");
-    return;
-  }
-
-  if (download.review?.is_excluded) {
-    await restoreSentinelReview(downloadId);
-    return;
-  }
-
-  forestState.sentinelReviewDrafts.delete(downloadId);
-  renderSentinelDownloadsPanel();
-  setForestStatus("Sentinel exclusion cancelled");
 }
 
 async function saveSentinelReviewDraft(downloadId) {
@@ -3038,6 +3151,7 @@ async function saveSentinelReviewDraft(downloadId) {
       notes: null,
     });
     forestState.sentinelReviewDrafts.delete(downloadId);
+    forestState.sentinelReviewEditorIds.delete(downloadId);
     forestState.sentinelReviewSavingIds.delete(downloadId);
     await refreshSelectedSampleAfterSentinelReview(previousSearch);
     refreshed = true;
@@ -3048,22 +3162,6 @@ async function saveSentinelReviewDraft(downloadId) {
       renderSentinelDownloadsPanel();
     }
   }
-}
-
-async function importSelectedFiles() {
-  const files = $("forestFileInput").files;
-  if (!files?.length) {
-    setForestStatus("select CSV or GeoJSON first");
-    return;
-  }
-  setForestStatus(`importing ${files.length} file(s)`);
-  const result = await importForestFiles(files);
-  $("forestImportStatus").textContent =
-    `imported ${result.imported_count}, duplicates ${result.duplicate_count}, rejected ${result.rejected_count}`;
-  forestState.offset = 0;
-  forestState.selectedSampleId = null;
-  forestState.selectedDetail = null;
-  await refreshSamples({ fit: true });
 }
 
 async function saveValidation() {
@@ -3123,56 +3221,7 @@ async function createExport() {
   setForestStatus(`export ready: ${result.sample_count} samples`);
 }
 
-async function pollBatchHansen() {
-  if (!forestState.hansenBatchJobId) return;
-  const job = await getForestJob(forestState.hansenBatchJobId);
-  renderBatchStatus(job);
-
-  if (isTerminalJobStatus(job.status)) {
-    window.clearTimeout(forestState.hansenBatchTimer);
-    forestState.hansenBatchTimer = null;
-    if (forestState.selectedSampleId) {
-      forestState.selectedDetail = await getForestSample(forestState.selectedSampleId);
-      ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
-      renderDetail();
-      renderMap();
-    }
-    setForestStatus(`Hansen batch ${job.status}`);
-    return;
-  }
-
-  forestState.hansenBatchTimer = window.setTimeout(() => run(pollBatchHansen), 1500);
-}
-
-async function startBatchHansen() {
-  const limit = Number($("forestBatchLimitInput").value) || 10;
-  const includeTreecover = Boolean($("forestBatchTreecoverInput")?.checked);
-  forestState.includeBatchHansenTreecover = includeTreecover;
-  setForestStatus("starting Hansen batch");
-  const job = await startHansenBatch(currentFilters(), limit, {
-    include_treecover: includeTreecover,
-  });
-  forestState.hansenBatchJobId = job.job_id;
-  renderBatchStatus(job);
-  window.clearTimeout(forestState.hansenBatchTimer);
-  forestState.hansenBatchTimer = window.setTimeout(() => run(pollBatchHansen), 300);
-}
-
-async function cancelBatchHansen() {
-  if (!forestState.hansenBatchJobId) return;
-  const job = await cancelForestJob(forestState.hansenBatchJobId);
-  renderBatchStatus(job);
-  setForestStatus("Hansen batch cancellation requested");
-}
-
 function bindEvents() {
-  $("forestModeBtn").addEventListener("click", () => run(() => setMode("forest")));
-  $("pipelineModeBtn").addEventListener("click", () => run(() => setMode("pipeline")));
-  $("forestImportBtn").addEventListener("click", () => run(importSelectedFiles));
-  $("forestFileInput").addEventListener("change", (event) => {
-    const count = event.target.files?.length || 0;
-    $("forestImportStatus").textContent = count ? `${count} file(s) selected` : "no files selected";
-  });
   $("forestReloadBtn").addEventListener("click", () => {
     forestState.offset = 0;
     run(() => refreshSamples({ fit: true }));
@@ -3203,16 +3252,18 @@ function bindEvents() {
     forestState.dbSyncSentinelTimer = null;
     renderDbSyncView();
   });
-  $("forestBatchHansenBtn").addEventListener("click", () => run(startBatchHansen));
-  $("forestBatchTreecoverInput").addEventListener("change", (event) => {
-    forestState.includeBatchHansenTreecover = event.target.checked;
-  });
-  $("forestCancelBatchBtn").addEventListener("click", () => run(cancelBatchHansen));
   $("forestClearMapBtn").addEventListener("click", clearForestLayers);
   $("sidebarToggle").addEventListener("click", toggleSidebar);
   $("mapLayerPanelOpen").addEventListener("click", () => setLayerPanelCollapsed(false));
   $("mapLayerPanelClose").addEventListener("click", () => setLayerPanelCollapsed(true));
   $("forestMapCompareBtn").addEventListener("click", openCompareView);
+  $("forestMapInspectorBtn").addEventListener("click", () => {
+    setSampleInspectorOpen(!forestState.sampleInspectorOpen);
+  });
+  $("forestSampleInspectorCloseBtn").addEventListener("click", () => setSampleInspectorOpen(false));
+  $("forestDrawerToggleBtn").addEventListener("click", () => {
+    setDetailDrawerCollapsed(!forestState.detailDrawerCollapsed);
+  });
   $("forestMapInfoBtn").addEventListener("click", () => {
     setMapInfoOpen(!forestState.mapInfoOpen);
   });
@@ -3283,6 +3334,8 @@ function bindEvents() {
     currentFilters,
     closeCompareView,
     closeDbSyncView,
+    closeSampleInspector: () => setSampleInspectorOpen(false),
+    closeMapInfo: () => setMapInfoOpen(false),
     updateWorkspaceFocus,
     setForestStatus,
     refreshForestData,

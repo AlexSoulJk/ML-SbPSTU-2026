@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIINfQHLGqSnISp6z7JOxhjhBT9eLkIOMbM="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/frontend/styles.css?v=map-actions-1" />
+    <link rel="stylesheet" href="/frontend/styles.css?v=sample-inspector-9" />
   </head>
   <body data-mode="forest">
     <main class="shell">
@@ -26,39 +26,16 @@
           </button>
         </header>
 
-        <section class="modeSwitch" aria-label="Mode">
-          <button id="forestModeBtn" type="button">Forest</button>
-          <button id="pipelineModeBtn" type="button">Pipeline</button>
-        </section>
-
-        <section class="panel forestOnly">
-          <h2>Import</h2>
-          <label class="fileButton">
-            CSV / GeoJSON
-            <input id="forestFileInput" type="file" accept=".csv,.geojson,.json" multiple />
-          </label>
-          <button id="forestImportBtn" class="primary">Import selected</button>
-          <div id="forestImportStatus" class="meta">no files selected</div>
-        </section>
-
-        <section class="panel forestOnly">
+        <section class="panel forestOnly forestFiltersPanel">
           <h2>Filters</h2>
-          <label>
-            Search
-            <input id="forestQueryInput" type="text" placeholder="sample/source/file" />
-          </label>
-          <label>
-            ID
-            <input id="forestIdInput" type="text" placeholder="sample/source id" />
-          </label>
           <div class="grid2">
+            <label>
+              ID
+              <input id="forestIdInput" type="text" placeholder="sample/source id" />
+            </label>
             <label>
               Driver
               <input id="forestDriverInput" type="text" placeholder="Logging" />
-            </label>
-            <label>
-              Region
-              <input id="forestRegionInput" type="text" placeholder="Europe" />
             </label>
           </div>
           <div class="grid2">
@@ -82,15 +59,11 @@
                 <option value="no_downloads">No downloads in DB</option>
               </select>
             </label>
-            <label>
-              Nearest N
-              <input id="forestNearestInput" type="number" min="0" max="250" value="25" />
-            </label>
           </div>
           <button id="forestReloadBtn" class="primary">Load samples</button>
         </section>
 
-        <section class="panel forestOnly">
+        <section class="panel forestOnly forestSamplesPanel">
           <h2>Samples</h2>
           <div class="forestPager">
             <button id="forestPrevPageBtn" type="button">Prev</button>
@@ -100,24 +73,7 @@
           <div id="forestSamplesList" class="forestSamplesList"></div>
         </section>
 
-        <section class="panel forestOnly">
-          <h2>Batch Hansen</h2>
-          <label>
-            Limit
-            <input id="forestBatchLimitInput" type="number" min="1" max="1000" value="10" />
-          </label>
-          <label class="toggle">
-            <input id="forestBatchTreecoverInput" type="checkbox" />
-            <span>treecover 2000</span>
-          </label>
-          <div class="row">
-            <button id="forestBatchHansenBtn" class="primary" type="button">Analyze filtered</button>
-            <button id="forestCancelBatchBtn" type="button" disabled>Cancel</button>
-          </div>
-          <div id="forestBatchStatus" class="meta">no batch job</div>
-        </section>
-
-        <section class="panel forestOnly">
+        <section class="panel forestOnly forestDebugPanel collapsed">
           <div class="panelTitleRow">
             <h2>Map Debug</h2>
             <div class="panelTitleActions">
@@ -189,17 +145,13 @@
       <section class="workspace">
         <div id="map"></div>
         <aside id="mapLayerPanel" class="mapLayerPanel">
-          <button id="mapLayerPanelOpen" class="mapLayerIconButton mapLayerPanelOpen" type="button" aria-expanded="false" title="Show layers" aria-label="Show layers">
+          <button id="mapLayerPanelClose" class="mapLayerIconButton mapLayerPanelClose" type="button" aria-expanded="true" title="Hide layers" aria-label="Hide layers">
             <span></span>
             <span></span>
           </button>
           <div class="mapLayerPanelBody">
             <header class="mapLayerPanelHeader">
               <h2>Layers</h2>
-              <button id="mapLayerPanelClose" class="mapLayerIconButton mapLayerPanelClose" type="button" aria-expanded="true" title="Hide layers" aria-label="Hide layers">
-                <span></span>
-                <span></span>
-              </button>
             </header>
             <section class="mapLayerGroup">
               <h2>Base Map</h2>
@@ -300,36 +252,59 @@
             </section>
           </div>
         </aside>
-        <div id="forestMapQuickActions" class="forestMapQuickActions forestOnly" aria-label="Selected sample actions">
-          <button
-            id="forestMapCompareBtn"
-            class="forestMapQuickActionButton"
-            type="button"
-            title="Compare PRE and POST imagery"
-            aria-label="Compare PRE and POST imagery"
-            disabled
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="2.75" y="4.75" width="7.5" height="14.5" rx="1.7"></rect>
-              <rect x="13.75" y="4.75" width="7.5" height="14.5" rx="1.7"></rect>
-              <path d="M8.4 8.4h7.2m0 0-2-2m2 2-2 2"></path>
-              <path d="M15.6 15.6H8.4m0 0 2 2m-2-2 2-2"></path>
-            </svg>
-          </button>
-          <button
-            id="forestMapInfoBtn"
-            class="forestMapQuickActionButton"
-            type="button"
-            title="Show candidate information"
-            aria-label="Show candidate information"
-            aria-expanded="false"
-            disabled
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9"></circle>
-              <path d="M12 10.5v6"></path>
-              <circle class="forestMapInfoDot" cx="12" cy="7.4" r="0.8"></circle>
-            </svg>
+        <div class="mapTopControls">
+          <div id="forestMapQuickActions" class="forestMapQuickActions forestOnly" aria-label="Selected sample actions">
+            <button
+              id="forestMapCompareBtn"
+              class="forestMapQuickActionButton"
+              type="button"
+              title="Compare PRE and POST imagery"
+              aria-label="Compare PRE and POST imagery"
+              disabled
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="2.75" y="4.75" width="7.5" height="14.5" rx="1.7"></rect>
+                <rect x="13.75" y="4.75" width="7.5" height="14.5" rx="1.7"></rect>
+                <path d="M8.4 8.4h7.2m0 0-2-2m2 2-2 2"></path>
+                <path d="M15.6 15.6H8.4m0 0 2 2m-2-2 2-2"></path>
+              </svg>
+            </button>
+            <button
+              id="forestMapInspectorBtn"
+              class="forestMapQuickActionButton"
+              type="button"
+              title="Show events and Sentinel imagery"
+              aria-label="Show events and Sentinel imagery"
+              aria-expanded="false"
+              disabled
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="4.5" width="18" height="16" rx="2"></rect>
+                <path d="M7 2.8v3.4M17 2.8v3.4M3 8.2h18"></path>
+                <rect x="6" y="11" width="5" height="5" rx="0.8"></rect>
+                <path d="m6.8 15 1.4-1.5 1.1 1 1.1-1.2"></path>
+                <path d="M13.8 11.8h4.2M13.8 14.2h4.2M13.8 16.6h3"></path>
+              </svg>
+            </button>
+            <button
+              id="forestMapInfoBtn"
+              class="forestMapQuickActionButton"
+              type="button"
+              title="Show candidate information"
+              aria-label="Show candidate information"
+              aria-expanded="false"
+              disabled
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 10.5v6"></path>
+                <circle class="forestMapInfoDot" cx="12" cy="7.4" r="0.8"></circle>
+              </svg>
+            </button>
+          </div>
+          <button id="mapLayerPanelOpen" class="mapLayerIconButton mapLayerPanelOpen" type="button" aria-expanded="false" title="Show layers" aria-label="Show layers">
+            <span></span>
+            <span></span>
           </button>
         </div>
         <aside id="forestMapInfoPanel" class="forestMapInfoPanel forestOnly" hidden aria-hidden="true">
@@ -341,6 +316,41 @@
             <button id="forestMapInfoCloseBtn" type="button" title="Close candidate information" aria-label="Close candidate information">×</button>
           </header>
           <div id="forestMapInfoContent" class="forestMapInfoContent"></div>
+        </aside>
+        <aside id="forestSampleInspector" class="forestSampleInspector forestOnly" hidden aria-hidden="true">
+          <header class="forestSampleInspectorHeader">
+            <div>
+              <strong>Events &amp; Sentinel</strong>
+              <span id="forestSampleInspectorTitle">Selected sample</span>
+            </div>
+            <button id="forestSampleInspectorCloseBtn" type="button" title="Close events and imagery" aria-label="Close events and imagery">&times;</button>
+          </header>
+          <div class="forestSampleInspectorBody">
+            <details class="forestInspectorEvents" open>
+              <summary>
+                <strong>Events</strong>
+                <span id="forestSampleInspectorEventsMeta" class="meta"></span>
+              </summary>
+              <div id="forestSampleInspectorEvents"></div>
+            </details>
+            <section class="forestInspectorImagery">
+              <header>
+                <div>
+                  <strong>Sentinel imagery</strong>
+                  <span id="forestSampleInspectorImagesMeta" class="meta"></span>
+                </div>
+              </header>
+              <details class="forestInspectorSentinelSearch">
+                <summary>
+                  <strong>Find Sentinel-2</strong>
+                  <span class="meta">search &amp; download</span>
+                </summary>
+                <div id="forestSampleInspectorSearch"></div>
+              </details>
+              <div id="forestSampleInspectorImageFilter"></div>
+              <div id="forestSentinelDownloads" class="forestSampleInspectorDownloads"></div>
+            </section>
+          </div>
         </aside>
         <section id="forestDbSyncView" class="forestDbSyncView forestOnly" hidden>
           <header class="forestDbSyncHeader">
@@ -776,12 +786,19 @@
         </section>
         <section class="drawer">
           <div id="forestDrawer" class="forestOnly">
-            <div class="drawerHeader">
-              <div class="drawerTitleBlock">
-                <h2>Forest Sample</h2>
-                <div id="forestStatusLine" class="drawerStatus">ready</div>
-              </div>
+            <div id="forestStatusLine" class="visuallyHidden" role="status" aria-live="polite">ready</div>
+            <div class="drawerHeader forestDrawerHeader">
               <div class="observationActions">
+                <button
+                  id="forestDrawerToggleBtn"
+                  class="drawerToggleButton"
+                  type="button"
+                  title="Collapse sample workspace"
+                  aria-label="Collapse sample workspace"
+                  aria-expanded="true"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 14 5-5 5 5"></path></svg>
+                </button>
                 <button id="forestDbSyncOpenBtn" type="button">Database Sync</button>
                 <button id="forestDataOperationsOpenBtn" type="button">Data Operations</button>
                 <button id="forestExportBtn">Export filtered</button>
@@ -818,6 +835,6 @@
       crossorigin=""
     ></script>
     <script src="/frontend/app.js?v=forest-data-ops-1"></script>
-    <script type="module" src="/frontend/forest/ui.js?v=map-actions-2"></script>
+    <script type="module" src="/frontend/forest/ui.js?v=sample-inspector-9"></script>
   </body>
 </html>

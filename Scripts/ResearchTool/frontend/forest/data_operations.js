@@ -22,7 +22,7 @@ import {
   rejectHansenCandidates,
   uploadDataOperationSourceFile,
 } from "./samples.js?v=candidate-hansen-masks-2";
-import { forestState } from "./state.js?v=map-actions-2";
+import { forestState } from "./state.js?v=sample-inspector-9";
 
 
 let dataOperationsCallbacks = null;
@@ -991,6 +991,8 @@ export function initDataOperations(callbacks) {
   $("forestDataOperationsOpenBtn").addEventListener("click", () => callbacks.run(async () => {
     callbacks.closeCompareView({ silent: true });
     callbacks.closeDbSyncView({ silent: true });
+    callbacks.closeSampleInspector();
+    callbacks.closeMapInfo();
     forestState.dataOperationsOpen = true;
     $("forestDataOperationsView").hidden = false;
     callbacks.updateWorkspaceFocus();
