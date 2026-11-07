@@ -22,7 +22,7 @@ import {
   rejectHansenCandidates,
   uploadDataOperationSourceFile,
 } from "./samples.js?v=candidate-hansen-masks-2";
-import { forestState } from "./state.js?v=sample-inspector-9";
+import { forestState } from "./state.js?v=event-review-flow-1";
 
 
 let dataOperationsCallbacks = null;

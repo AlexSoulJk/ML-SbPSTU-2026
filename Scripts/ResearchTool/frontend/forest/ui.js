@@ -1,5 +1,5 @@
-import { clearForestLayers, renderForestMap } from "./map.js?v=sample-inspector-9";
-import { initDataOperations } from "./data_operations.js?v=sample-inspector-9";
+import { clearForestLayers, renderForestMap } from "./map.js?v=event-review-flow-1";
+import { initDataOperations } from "./data_operations.js?v=event-review-flow-1";
 import { createPaletteClassifier } from "./raster_palette.js?v=hansen-tile-colors-2";
 import {
   analyzeHansen,
@@ -20,7 +20,7 @@ import {
   searchSentinel,
   startSentinelCacheDownload,
 } from "./samples.js?v=candidate-hansen-masks-2";
-import { forestState } from "./state.js?v=sample-inspector-9";
+import { forestState } from "./state.js?v=event-review-flow-1";
 
 function $(id) {
   return document.getElementById(id);
@@ -519,9 +519,10 @@ function renderSampleInspector() {
 
   const events = sample.events || [];
   const downloads = sample.sentinel?.downloads || [];
+  const reviewSummary = eventReviewSummary(sample);
   $("forestSampleInspectorTitle").textContent = sampleDisplayName(sample);
   $("forestSampleInspectorEventsMeta").textContent = events.length
-    ? `${events.length}${sample.has_multiple_events ? " / multiple" : ""}`
+    ? `${reviewSummary.reviewed}/${reviewSummary.total} reviewed${sample.has_multiple_events ? " / multiple" : ""}`
     : "No derived events";
   $("forestSampleInspectorImagesMeta").textContent = `${downloads.length} downloaded`;
   $("forestSampleInspectorEvents").innerHTML = renderSampleEvents(sample, { showHeader: false });
@@ -2217,6 +2218,45 @@ function unassignedSentinelDownloads(sample) {
   return (sample.sentinel?.downloads || []).filter((download) => !(download.event_links || []));
 }
 
+function eventReviewStatus(event) {
+  return String(event?.review?.review_status || "DRAFT").toUpperCase();
+}
+
+function eventReviewSummary(sample) {
+  const events = sample?.events || [];
+  const reviewed = events.filter((event) => eventReviewStatus(event) !== "DRAFT").length;
+  const total = events.length;
+  const completion = total === 0
+    ? "NOT_STARTED"
+    : reviewed === 0
+      ? "NOT_STARTED"
+      : reviewed === total
+        ? "COMPLETE"
+        : "PARTIAL";
+  return {
+    total,
+    reviewed,
+    pending: total - reviewed,
+    completion,
+    percent: total ? Math.round((reviewed / total) * 100) : 0,
+  };
+}
+
+function nextPendingReviewEvent(sample, currentEventId = null) {
+  const events = sample?.events || [];
+  const isPending = (event) => eventReviewStatus(event) === "DRAFT";
+  const currentIndex = events.findIndex((event) => event.event_id === currentEventId);
+  if (currentIndex >= 0) {
+    const laterPending = events.slice(currentIndex + 1).find(isPending);
+    const earlierPending = events.slice(0, currentIndex).find(isPending);
+    if (laterPending || earlierPending) return laterPending || earlierPending;
+    return isPending(events[currentIndex]) ? events[currentIndex] : null;
+  }
+  return events.find((event) => event.is_dominant && isPending(event))
+    || events.find(isPending)
+    || null;
+}
+
 function normalizeSelectedSampleEvent(sample) {
   const selectedEventId = forestState.selectedSampleEventId || "all";
   if (selectedEventId === "all") return;
@@ -2236,12 +2276,17 @@ function selectedSentinelSearchEvent(sample) {
 function renderEventFilterRow({ value, title, detail, trailing, event = null }) {
   const selected = (forestState.selectedSampleEventId || "all") === value;
   const counts = event?.download_counts || {};
+  const reviewStatus = event ? eventReviewStatus(event) : null;
+  const reviewClass = reviewStatus === "DRAFT" ? "pending" : "reviewed";
   return `
-    <label class="forestEventRow ${selected ? "active" : ""}">
+    <label class="forestEventRow ${selected ? "active" : ""} ${event ? reviewClass : ""}">
       <input class="forestEventFilterInput" type="radio" name="forestEventFilter" value="${escapeHtml(value)}" ${selected ? "checked" : ""} />
       <span class="forestEventRowBody">
         <span class="forestEventIdentity">
-          <strong>${escapeHtml(title)}</strong>
+          <span class="forestEventTitleLine">
+            <strong>${escapeHtml(title)}</strong>
+            ${event ? `<span class="forestEventReviewBadge ${reviewClass}">${escapeHtml(reviewStatus)}</span>` : ""}
+          </span>
           <span>${escapeHtml(detail)}</span>
         </span>
         ${event ? `
@@ -2263,12 +2308,24 @@ function renderSampleEvents(sample, options = {}) {
   const downloads = sample.sentinel?.downloads || [];
   const unassigned = unassignedSentinelDownloads(sample);
   const showHeader = options.showHeader !== false;
+  const reviewSummary = eventReviewSummary(sample);
   return `
     <article class="forestSampleEvents">
       ${showHeader ? `
         <div class="forestPanelHeader">
           <h3>Events</h3>
           <span class="meta">${events.length ? `${events.length}${sample.has_multiple_events ? " / multiple" : ""}` : "No derived Hansen events"}</span>
+        </div>
+      ` : ""}
+      ${events.length ? `
+        <div class="forestEventReviewProgress ${reviewSummary.completion.toLowerCase()}">
+          <span class="forestEventReviewProgressText">
+            <strong>Reviewed ${reviewSummary.reviewed}/${reviewSummary.total}</strong>
+            <span>${escapeHtml(reviewSummary.completion.replaceAll("_", " "))}</span>
+          </span>
+          <span class="forestEventReviewProgressTrack" aria-label="Event review progress ${reviewSummary.percent}%">
+            <span style="width: ${reviewSummary.percent}%"></span>
+          </span>
         </div>
       ` : ""}
       <div class="forestEventRows">
@@ -2279,8 +2336,7 @@ function renderSampleEvents(sample, options = {}) {
           trailing: `${downloads.length} Sentinel downloads`,
         })}
         ${events.map((event) => {
-          const reviewStatus = event.review?.review_status || "DRAFT";
-          const detail = `${event.source || "unknown"}${event.is_dominant ? " / dominant by area" : ""} / ${reviewStatus}`;
+          const detail = `${event.source || "unknown"}${event.is_dominant ? " / dominant by area" : ""}`;
           return renderEventFilterRow({
             value: event.event_id,
             title: String(event.event_year),
@@ -2317,6 +2373,9 @@ function renderEventReviewPanel(sample) {
     ? modelLabels[0]
     : null;
   const actor = window.localStorage.getItem("forestAnnotatorName") || "";
+  const reviewSummary = eventReviewSummary(sample);
+  const showCompletion = reviewSummary.completion === "COMPLETE"
+    && forestState.eventReviewCompletionDismissedSampleId !== sample.sample_id;
   return `
     <section id="forestEventReviewPanel" class="forestEventReviewPanel">
       <div class="forestPanelHeader">
@@ -2361,6 +2420,18 @@ function renderEventReviewPanel(sample) {
         <button id="forestEventReviewSaveBtn" class="primary" type="button">Save event review</button>
       </div>
       ${review.is_inherited ? `<span class="meta">Current state is inherited from the legacy sample label and is not duplicated in event tables yet.</span>` : ""}
+      ${showCompletion ? `
+        <div class="forestEventReviewComplete">
+          <span>
+            <strong>All events reviewed</strong>
+            <span>${reviewSummary.reviewed} of ${reviewSummary.total} event years are complete.</span>
+          </span>
+          <span class="forestEventReviewCompleteActions">
+            <button id="forestEventReviewStayBtn" type="button">Stay here</button>
+            <button id="forestEventReviewNextSampleBtn" class="primary" type="button">Next sample</button>
+          </span>
+        </div>
+      ` : ""}
     </section>
   `;
 }
@@ -2555,6 +2626,12 @@ function bindSampleInspectorControls() {
     });
   });
   $("forestEventReviewSaveBtn")?.addEventListener("click", () => run(saveCurrentEventReview));
+  $("forestEventReviewStayBtn")?.addEventListener("click", () => {
+    forestState.eventReviewCompletionDismissedSampleId = sample.sample_id;
+    renderDetail();
+    setForestStatus("event review complete; staying on current sample");
+  });
+  $("forestEventReviewNextSampleBtn")?.addEventListener("click", () => run(moveToNextReviewSample));
   document.querySelectorAll("#forestSampleInspector [data-event-model-label-id]").forEach((button) => {
     button.addEventListener("click", () => run(() => saveCurrentEventReview({
       basedOnLabelId: button.dataset.eventModelLabelId,
@@ -2771,6 +2848,7 @@ function clearSelectedSample() {
   forestState.sentinelReviewEditorIds.clear();
   forestState.sentinelReviewSavingIds.clear();
   forestState.selectedSampleEventId = "all";
+  forestState.eventReviewCompletionDismissedSampleId = null;
   forestState.nearest = [];
   resetHansenTilePreview();
 }
@@ -2821,6 +2899,7 @@ async function selectSample(sampleId, options = {}) {
     forestState.sentinelReviewEditorIds.clear();
     forestState.sentinelReviewSavingIds.clear();
     forestState.selectedSampleEventId = "all";
+    forestState.eventReviewCompletionDismissedSampleId = null;
     forestState.comparePreDownloadId = null;
     forestState.comparePostDownloadId = null;
     resetHansenTilePreview();
@@ -3197,9 +3276,57 @@ async function saveCurrentEventReview({ basedOnLabelId = null, acceptedLabel = n
     actor_name: actorName,
   });
   forestState.selectedDetail = await getForestSample(sample.sample_id);
+  forestState.eventReviewCompletionDismissedSampleId = null;
+  const nextEvent = nextPendingReviewEvent(forestState.selectedDetail, event.event_id);
+  if (nextEvent) {
+    forestState.selectedSampleEventId = nextEvent.event_id;
+    ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
+  }
   renderDetail();
-  await refreshSamples();
-  setForestStatus(`event ${event.event_year} review saved: ${reviewStatus}`);
+  renderMap();
+  const summary = eventReviewSummary(forestState.selectedDetail);
+  if (summary.completion === "COMPLETE") {
+    setForestStatus(`event ${event.event_year} review saved: ${reviewStatus}; all ${summary.total} events complete`);
+    return;
+  }
+  setForestStatus(`event ${event.event_year} review saved: ${reviewStatus}; next event ${nextEvent?.event_year || "pending"}`);
+}
+
+async function moveToNextReviewSample() {
+  const currentSampleId = forestState.selectedSampleId;
+  const currentIndex = forestState.samples.findIndex((sample) => sample.sample_id === currentSampleId);
+  const orderedCandidates = currentIndex >= 0
+    ? [
+        ...forestState.samples.slice(currentIndex + 1),
+        ...forestState.samples.slice(0, currentIndex),
+      ]
+    : forestState.samples;
+  const nextSample = orderedCandidates.find((sample) => sample.sample_id !== currentSampleId);
+  forestState.eventReviewCompletionDismissedSampleId = null;
+
+  if (nextSample) {
+    await selectSample(nextSample.sample_id, { fit: true });
+  } else {
+    const reopenInspector = forestState.sampleInspectorOpen;
+    clearSelectedSample();
+    await refreshSamples({ fit: true });
+    forestState.sampleInspectorOpen = Boolean(reopenInspector && forestState.selectedDetail);
+  }
+
+  if (!forestState.selectedDetail || forestState.selectedSampleId === currentSampleId) {
+    renderDetail();
+    setForestStatus("no next sample is available in the current filtered page");
+    return;
+  }
+
+  const nextEvent = nextPendingReviewEvent(forestState.selectedDetail);
+  forestState.selectedSampleEventId = nextEvent?.event_id || "all";
+  ensureActiveSentinelPreviewForSample(forestState.selectedDetail);
+  renderDetail();
+  renderMap();
+  setForestStatus(nextEvent
+    ? `next sample selected; reviewing event ${nextEvent.event_year}`
+    : "next sample selected; it has no pending event reviews");
 }
 
 async function saveSampleName() {

@@ -853,6 +853,75 @@ class DataOperationsTest(unittest.TestCase):
         self.assertEqual(result["sample_rollup"]["completion"], "PARTIAL")
         self.assertEqual(manual.validation, "Valid")
         self.assertEqual(self.db.get(EventReview, second.event_id).review_status, "DRAFT")
+        self.assertEqual(
+            [
+                row.sample_id
+                for row in self.db.scalars(
+                    samples_select({"manual_validation": "__needs_event_review"})
+                )
+            ],
+            [item.sample_id],
+        )
+        self.assertEqual(
+            list(
+                self.db.scalars(
+                    samples_select({"manual_validation": "__no_manual_validation"})
+                )
+            ),
+            [],
+        )
+
+        completed = save_event_review(
+            self.db,
+            second.event_id,
+            review_status="VALID",
+            label="Logging",
+            actor_name="tester",
+        )
+
+        self.assertEqual(completed["sample_rollup"]["completion"], "COMPLETE")
+        self.assertEqual(
+            list(
+                self.db.scalars(
+                    samples_select({"manual_validation": "__needs_event_review"})
+                )
+            ),
+            [],
+        )
+
+    def test_needs_event_review_filter_respects_legacy_inherited_reviews(self) -> None:
+        inherited = sample("legacy-inherited-review")
+        inherited_event = SampleEvent(
+            event_id=event_id_for(inherited.sample_id, "HANSEN", 2019),
+            sample_id=inherited.sample_id,
+            event_year=2019,
+            source="HANSEN",
+        )
+        pending = sample("legacy-pending-review")
+        pending_event = SampleEvent(
+            event_id=event_id_for(pending.sample_id, "HANSEN", 2020),
+            sample_id=pending.sample_id,
+            event_year=2020,
+            source="HANSEN",
+        )
+        self.db.add_all(
+            [
+                inherited,
+                inherited_event,
+                ManualValidation(sample_id=inherited.sample_id, validation="Valid"),
+                pending,
+                pending_event,
+            ]
+        )
+        self.db.commit()
+
+        rows = list(
+            self.db.scalars(
+                samples_select({"manual_validation": "__needs_event_review"})
+            )
+        )
+
+        self.assertEqual([row.sample_id for row in rows], [pending.sample_id])
 
     def test_materialized_candidate_has_draft_events_and_no_manual_validation(self) -> None:
         run = HansenCandidateRun(

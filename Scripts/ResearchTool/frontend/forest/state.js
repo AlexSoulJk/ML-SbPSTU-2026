@@ -55,6 +55,7 @@ export const forestState = {
   activeSentinelPreview: null,
   sentinelImageIdQuery: "",
   selectedSampleEventId: "all",
+  eventReviewCompletionDismissedSampleId: null,
   sclHiddenClasses: new Set(),
   sclLegendCache: new Map(),
   sclLegendPending: new Map(),

@@ -1586,6 +1586,50 @@ textarea {
   margin-bottom: 8px;
 }
 
+.forestEventReviewProgress {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 7px 8px;
+  border: 1px solid #d8dfd5;
+  border-radius: 6px;
+  background: #f7f9f5;
+}
+
+.forestEventReviewProgressText {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.forestEventReviewProgressText > span {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.forestEventReviewProgressTrack {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #dfe5dd;
+}
+
+.forestEventReviewProgressTrack > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #d1932d;
+  transition: width 180ms ease;
+}
+
+.forestEventReviewProgress.complete .forestEventReviewProgressTrack > span {
+  background: var(--brand);
+}
+
 .forestEventRows {
   display: grid;
   gap: 6px;
@@ -1615,6 +1659,11 @@ textarea {
   background: #eef5ec;
 }
 
+.forestEventRow.reviewed:not(.active) {
+  border-color: #c7dac7;
+  background: #f5faf3;
+}
+
 .forestEventRow > input {
   width: 14px;
   min-height: 14px;
@@ -1642,6 +1691,30 @@ textarea {
   color: var(--ink);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.forestEventTitleLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+}
+
+.forestEventReviewBadge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 99px;
+  background: #efe7d6;
+  color: #7b581c;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.forestEventReviewBadge.reviewed {
+  background: #dcebd8;
+  color: #315d31;
 }
 
 .forestEventIdentity > span,
@@ -1725,6 +1798,39 @@ textarea {
 .forestEventReviewControls button {
   grid-column: 1 / -1;
   justify-self: end;
+}
+
+.forestEventReviewComplete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px;
+  border: 1px solid #bad2b7;
+  border-radius: 7px;
+  background: #edf6ea;
+}
+
+.forestEventReviewComplete > span:first-child {
+  display: grid;
+  gap: 2px;
+  color: #315d31;
+}
+
+.forestEventReviewComplete > span:first-child > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.forestEventReviewCompleteActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.forestEventReviewCompleteActions button {
+  padding: 6px 9px;
+  font-size: 11px;
 }
 
 .forestImageFilterPanel {
