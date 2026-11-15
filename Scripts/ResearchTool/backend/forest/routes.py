@@ -279,6 +279,7 @@ class EventReviewRequest(BaseModel):
     label: str | None = None
     based_on_label_id: str | None = None
     rejection_reason: str | None = None
+    reason_codes: list[str] | None = None
     notes: str | None = None
     actor_name: str | None = Field(default=None, max_length=255)
 
@@ -1477,6 +1478,7 @@ def save_sample_event_review(
             label=request.label,
             based_on_label_id=request.based_on_label_id,
             rejection_reason=request.rejection_reason,
+            reason_codes=request.reason_codes,
             notes=request.notes,
         )
     except ValueError as exc:

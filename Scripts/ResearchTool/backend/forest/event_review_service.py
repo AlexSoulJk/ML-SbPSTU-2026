@@ -20,6 +20,13 @@ from .models import (
     SampleStatus,
     utc_now,
 )
+from .review_reason_service import (
+    append_event_review_revision,
+    event_review_reason_codes,
+    map_legacy_rejection_reason,
+    normalize_reason_codes,
+    replace_event_review_reasons,
+)
 
 
 EVENT_REVIEW_STATUSES = {"DRAFT", "VALID", "UNCLEAR", "REJECTED"}
@@ -184,6 +191,7 @@ def save_event_review(
     label: str | None = None,
     based_on_label_id: str | None = None,
     rejection_reason: str | None = None,
+    reason_codes: list[str] | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
     status = review_status.strip().upper()
@@ -196,14 +204,19 @@ def save_event_review(
 
     normalized_label = (label or "").strip() or None
     normalized_reason = (rejection_reason or "").strip() or None
+    normalized_codes = normalize_reason_codes(reason_codes)
+    if status == "REJECTED" and not normalized_codes and normalized_reason:
+        normalized_codes = list(map_legacy_rejection_reason(normalized_reason).reason_codes)
     if status == "VALID" and normalized_label not in EVENT_LABELS:
         raise ValueError("VALID review requires label: Logging, Wildfire or Other")
     if status != "VALID" and normalized_label is not None:
         raise ValueError(f"{status} review cannot have a human label")
-    if status == "REJECTED" and normalized_reason is None:
-        raise ValueError("REJECTED review requires rejection_reason")
+    if status == "REJECTED" and normalized_reason is None and not normalized_codes:
+        raise ValueError("REJECTED review requires rejection_reason or reason_codes")
     if status != "REJECTED" and normalized_reason is not None:
         raise ValueError(f"{status} review cannot have rejection_reason")
+    if status != "REJECTED" and normalized_codes:
+        raise ValueError(f"{status} review cannot have reason_codes")
 
     based_on = None
     if based_on_label_id:
@@ -242,6 +255,21 @@ def save_event_review(
     review.notes = (notes or "").strip() or None
     review.reviewer_name = actor
     review.updated_at = utc_now()
+    db.flush()
+    replace_event_review_reasons(
+        db,
+        event_id,
+        normalized_codes,
+        reason_text=normalized_reason,
+    )
+    append_event_review_revision(
+        db,
+        review,
+        reason_codes=normalized_codes,
+        revision_source="INTERACTIVE",
+        event_class=human_label.label if human_label is not None else None,
+        created_at=review.updated_at,
+    )
     db.flush()
     rollup = roll_up_sample_reviews(db, event.sample_id)
     db.commit()
@@ -332,6 +360,7 @@ def event_review_payload(
         "label_source": label_source,
         "is_inherited": inherited,
         "rejection_reason": review.rejection_reason if review else None,
+        "reason_codes": event_review_reason_codes(db, event.event_id) if review else [],
         "notes": review.notes if review else None,
         "reviewer_name": review.reviewer_name if review else None,
         "updated_at": review.updated_at.isoformat() if review and review.updated_at else None,

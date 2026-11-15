@@ -343,6 +343,462 @@ class EventReview(Base):
     )
 
 
+class EventReviewReason(Base):
+    __tablename__ = "forest_event_review_reasons"
+    __table_args__ = (
+        UniqueConstraint("event_id", "reason_code", name="uq_forest_event_review_reason"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_event_reviews.event_id"),
+        nullable=False,
+        index=True,
+    )
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason_text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class EventReviewRevision(Base):
+    __tablename__ = "forest_event_review_revisions"
+
+    revision_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_event_reviews.event_id"),
+        nullable=False,
+        index=True,
+    )
+    reviewer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    event_class: Mapped[str | None] = mapped_column(String(32), index=True)
+    reason_codes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    accepted_label_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_event_labels.label_id"),
+        index=True,
+    )
+    revision_source: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CandidatePreparationRun(Base):
+    __tablename__ = "forest_candidate_preparation_runs"
+
+    run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    pipeline_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    pipeline_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    algorithm_version: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    database_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_candidate_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_hansen_candidate_runs.run_id"),
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    report_path: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PreparedEvent(Base):
+    __tablename__ = "forest_prepared_events"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_forest_prepared_event_idempotency"),
+    )
+
+    prepared_event_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_candidate_preparation_runs.run_id"),
+        nullable=False,
+        index=True,
+    )
+    sample_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_samples.sample_id"),
+        nullable=False,
+        index=True,
+    )
+    dominant_year: Mapped[int | None] = mapped_column(Integer, index=True)
+    hansen_years_json: Mapped[str] = mapped_column(Text, nullable=False)
+    aggregate_geometry_json: Mapped[str | None] = mapped_column(Text)
+    aggregate_features_json: Mapped[str | None] = mapped_column(Text)
+    temporal_analysis_status: Mapped[str | None] = mapped_column(String(64), index=True)
+    diagnostic_flags_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    is_legacy_backfill: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+    )
+    backfill_version: Mapped[str | None] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PreparedEventMember(Base):
+    __tablename__ = "forest_prepared_event_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "prepared_event_id",
+            "source_event_id",
+            name="uq_forest_prepared_event_member",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "source_event_id",
+            name="uq_forest_prepared_event_source_per_run",
+        ),
+    )
+
+    member_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_events.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_candidate_preparation_runs.run_id"),
+        nullable=False,
+        index=True,
+    )
+    source_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sample_events.event_id"),
+        nullable=False,
+        index=True,
+    )
+    event_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    year_offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    member_role: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    candidate_role: Mapped[str | None] = mapped_column(String(64), index=True)
+    relative_area: Mapped[float | None] = mapped_column(Float)
+    spatial_features_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class EventEligibilityAssessment(Base):
+    __tablename__ = "forest_event_eligibility_assessments"
+    __table_args__ = (
+        UniqueConstraint(
+            "prepared_event_id",
+            "assessment_version",
+            "input_hash",
+            name="uq_forest_event_eligibility_input",
+        ),
+    )
+
+    assessment_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_events.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    assessment_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    details_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class InferenceExecution(Base):
+    __tablename__ = "forest_inference_executions"
+
+    execution_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    candidate_preparation_run_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_candidate_preparation_runs.run_id"),
+        nullable=False,
+        index=True,
+    )
+    xgboost_version: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    xgboost_artifact_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    remoteclip_version: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    remoteclip_artifact_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_cohort_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InferenceExecutionLabelRun(Base):
+    __tablename__ = "forest_inference_execution_label_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "execution_id",
+            "label_run_id",
+            name="uq_forest_inference_execution_label_run",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_inference_executions.execution_id"),
+        nullable=False,
+        index=True,
+    )
+    label_run_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_label_runs.label_run_id"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PreparedEventLabel(Base):
+    __tablename__ = "forest_prepared_event_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "prepared_event_id",
+            "source_name",
+            "source_version",
+            "input_fingerprint",
+            name="uq_forest_prepared_event_label_input",
+        ),
+    )
+
+    label_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_events.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    sample_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_samples.sample_id"),
+        nullable=False,
+        index=True,
+    )
+    execution_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_inference_executions.execution_id"),
+        index=True,
+    )
+    label_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_label_runs.label_run_id"),
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_version: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    artifact_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    label: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    probabilities_json: Mapped[str | None] = mapped_column(Text)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PreparedEventReview(Base):
+    __tablename__ = "forest_prepared_event_reviews"
+
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_events.prepared_event_id"),
+        primary_key=True,
+    )
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    event_class: Mapped[str | None] = mapped_column(String(32), index=True)
+    accepted_label_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_prepared_event_labels.label_id"),
+        index=True,
+    )
+    comment: Mapped[str | None] = mapped_column(Text)
+    reviewer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class PreparedEventReviewReason(Base):
+    __tablename__ = "forest_prepared_event_review_reasons"
+    __table_args__ = (
+        UniqueConstraint(
+            "prepared_event_id",
+            "reason_code",
+            name="uq_forest_prepared_event_review_reason",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_event_reviews.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason_text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PreparedEventReviewRevision(Base):
+    __tablename__ = "forest_prepared_event_review_revisions"
+
+    revision_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_event_reviews.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    reviewer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    event_class: Mapped[str | None] = mapped_column(String(32), index=True)
+    reason_codes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    accepted_label_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_prepared_event_labels.label_id"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ExpertEventPartition(Base):
+    __tablename__ = "forest_expert_event_partitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_preparation_run_id",
+            "sample_id",
+            "revision",
+            name="uq_forest_expert_partition_revision",
+        ),
+    )
+
+    partition_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    candidate_preparation_run_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_candidate_preparation_runs.run_id"),
+        nullable=False,
+        index=True,
+    )
+    sample_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_samples.sample_id"),
+        nullable=False,
+        index=True,
+    )
+    reviewer_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    supersedes_partition_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_expert_event_partitions.partition_id"),
+        index=True,
+    )
+    comment: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ExpertEventPartitionGroup(Base):
+    __tablename__ = "forest_expert_event_partition_groups"
+    __table_args__ = (
+        UniqueConstraint(
+            "partition_id",
+            "group_index",
+            name="uq_forest_expert_partition_group_index",
+        ),
+    )
+
+    partition_group_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    partition_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_expert_event_partitions.partition_id"),
+        nullable=False,
+        index=True,
+    )
+    group_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    dominant_year: Mapped[int | None] = mapped_column(Integer, index=True)
+
+
+class ExpertEventPartitionMember(Base):
+    __tablename__ = "forest_expert_event_partition_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "partition_id",
+            "source_event_id",
+            name="uq_forest_expert_partition_source_event",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    partition_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_expert_event_partitions.partition_id"),
+        nullable=False,
+        index=True,
+    )
+    partition_group_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_expert_event_partition_groups.partition_group_id"),
+        nullable=False,
+        index=True,
+    )
+    source_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_sample_events.event_id"),
+        nullable=False,
+        index=True,
+    )
+
+
+class PreparedEventMergeReview(Base):
+    __tablename__ = "forest_prepared_event_merge_reviews"
+
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_events.prepared_event_id"),
+        primary_key=True,
+    )
+    merge_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    partition_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_expert_event_partitions.partition_id"),
+        index=True,
+    )
+    comment: Mapped[str | None] = mapped_column(Text)
+    reviewer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class PreparedEventMergeReviewReason(Base):
+    __tablename__ = "forest_prepared_event_merge_review_reasons"
+    __table_args__ = (
+        UniqueConstraint(
+            "prepared_event_id",
+            "reason_code",
+            name="uq_forest_prepared_event_merge_review_reason",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_event_merge_reviews.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason_text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PreparedEventMergeReviewRevision(Base):
+    __tablename__ = "forest_prepared_event_merge_review_revisions"
+
+    revision_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    prepared_event_id: Mapped[str] = mapped_column(
+        ForeignKey("forest_prepared_event_merge_reviews.prepared_event_id"),
+        nullable=False,
+        index=True,
+    )
+    reviewer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    merge_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    reason_codes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    partition_id: Mapped[str | None] = mapped_column(
+        ForeignKey("forest_expert_event_partitions.partition_id"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class HansenTile(Base):
     __tablename__ = "forest_hansen_tiles"
     __table_args__ = (
