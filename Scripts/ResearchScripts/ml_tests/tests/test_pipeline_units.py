@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,11 +24,24 @@ from ml_tests.latent_diagnostics import (
     _knn_scores,
 )
 from ml_tests.reporting import baseline_metrics_html
+from ml_tests.rejection_diagnostics import (
+    build_rejection_diagnostics,
+    infer_expert_event_year,
+    rejection_reason_group,
+    small_event_threshold_analysis,
+)
+from ml_tests.review_validation import (
+    load_reviewer_validation,
+    summarize_reviewer_validation,
+)
 from ml_tests.sample_evaluation import run_valid_post_clustering
 from ml_tests.splits import assert_no_group_leakage, build_saved_splits
+from ml_tests.year_mismatch_research import build_year_mismatch_research
 
 from ResearchTool.backend.forest.models import (
     Base,
+    EventLabel,
+    EventReview,
     Sample,
     SampleEvent,
     SampleEventDownload,
@@ -386,6 +400,348 @@ class ModelArtifactTests(unittest.TestCase):
             self.assertTrue(artifact_status["ready"], artifact_status["errors"])
 
 
+class ReviewerValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(self.engine)
+
+    @staticmethod
+    def label(
+        label_id: str,
+        *,
+        sample_id: str,
+        event_id: str,
+        source_type: str,
+        source_name: str,
+        value: str,
+        created_at: datetime,
+        fingerprint: str,
+    ) -> EventLabel:
+        return EventLabel(
+            label_id=label_id,
+            sample_id=sample_id,
+            event_id=event_id,
+            source_type=source_type,
+            source_name=source_name,
+            source_version="v1",
+            label=value,
+            confidence=0.8,
+            input_fingerprint=fingerprint,
+            created_at=created_at,
+        )
+
+    def test_current_human_truth_and_latest_model_labels_are_used(self) -> None:
+        old = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        new = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        with Session(self.engine) as db:
+            db.add_all([sample("s1"), sample("s2"), sample("other")])
+            db.add_all(
+                [
+                    SampleEvent(event_id="e1", sample_id="s1", event_year=2020, source="HANSEN"),
+                    SampleEvent(event_id="e2", sample_id="s2", event_year=2021, source="HANSEN"),
+                    SampleEvent(
+                        event_id="e-other",
+                        sample_id="other",
+                        event_year=2022,
+                        source="HANSEN",
+                    ),
+                ]
+            )
+            db.flush()
+            labels = [
+                self.label(
+                    "h1",
+                    sample_id="s1",
+                    event_id="e1",
+                    source_type="HUMAN",
+                    source_name="MANUAL",
+                    value="Logging",
+                    created_at=new,
+                    fingerprint="h1",
+                ),
+                self.label(
+                    "h2",
+                    sample_id="s2",
+                    event_id="e2",
+                    source_type="HUMAN",
+                    source_name="MANUAL",
+                    value="Wildfire",
+                    created_at=new,
+                    fingerprint="h2",
+                ),
+                self.label(
+                    "rc-old",
+                    sample_id="s1",
+                    event_id="e1",
+                    source_type="MODEL",
+                    source_name="REMOTECLIP_LOGREG",
+                    value="Wildfire",
+                    created_at=old,
+                    fingerprint="rc-old",
+                ),
+                self.label(
+                    "rc-new",
+                    sample_id="s1",
+                    event_id="e1",
+                    source_type="MODEL",
+                    source_name="REMOTECLIP_LOGREG",
+                    value="Logging",
+                    created_at=new,
+                    fingerprint="rc-new",
+                ),
+                self.label(
+                    "x1",
+                    sample_id="s1",
+                    event_id="e1",
+                    source_type="MODEL",
+                    source_name="XGBOOST",
+                    value="Logging",
+                    created_at=new,
+                    fingerprint="x1",
+                ),
+                self.label(
+                    "rc2",
+                    sample_id="s2",
+                    event_id="e2",
+                    source_type="MODEL",
+                    source_name="REMOTECLIP_LOGREG",
+                    value="Logging",
+                    created_at=new,
+                    fingerprint="rc2",
+                ),
+                self.label(
+                    "x2",
+                    sample_id="s2",
+                    event_id="e2",
+                    source_type="MODEL",
+                    source_name="XGBOOST",
+                    value="Wildfire",
+                    created_at=new,
+                    fingerprint="x2",
+                ),
+            ]
+            db.add_all(labels)
+            db.flush()
+            db.add_all(
+                [
+                    EventReview(
+                        event_id="e1",
+                        review_status="VALID",
+                        human_label_id="h1",
+                        reviewer_name="Olga",
+                    ),
+                    EventReview(
+                        event_id="e2",
+                        review_status="VALID",
+                        human_label_id="h2",
+                        reviewer_name="Olga",
+                    ),
+                    EventReview(
+                        event_id="e-other",
+                        review_status="REJECTED",
+                        reviewer_name="Another reviewer",
+                    ),
+                ]
+            )
+            db.commit()
+
+            rows = load_reviewer_validation(db, reviewer_name="olga")
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["remoteclip_label_id"], "rc-new")
+        self.assertEqual(rows[0]["joint_outcome"], "BOTH_CORRECT")
+        self.assertEqual(rows[1]["joint_outcome"], "XGBOOST_ONLY_CORRECT")
+        summary = summarize_reviewer_validation(rows, bootstrap_runs=20, seed=7)
+        metrics = {row["model"]: row for row in summary["model_metrics"]}
+        self.assertEqual(metrics["REMOTECLIP_LOGREG"]["accuracy"], 0.5)
+        self.assertEqual(metrics["XGBOOST"]["accuracy"], 1.0)
+        self.assertEqual(summary["summary"]["reviewed_samples"], 2)
+
+
+class RejectionDiagnosticsTests(unittest.TestCase):
+    def test_rejection_reason_hierarchy_normalizes_free_text(self) -> None:
+        self.assertEqual(rejection_reason_group("No PRE-images"), "NO_PRE")
+        self.assertEqual(
+            rejection_reason_group("Последствия пожара прошлого года"),
+            "YEAR_MISMATCH",
+        )
+        self.assertEqual(
+            rejection_reason_group("Маленькое событие по маске"),
+            "EVENT_TOO_SMALL",
+        )
+        self.assertEqual(rejection_reason_group("Изменений не видно"), "NO_VISIBLE_CHANGE")
+        self.assertEqual(
+            rejection_reason_group("Невозможно определить тип"),
+            "TYPE_UNCLEAR",
+        )
+
+    def test_hierarchical_diagnostics_keep_missing_latent_rows_visible(self) -> None:
+        review_rows = [
+            {
+                "sample_id": "s1",
+                "event_id": "e1",
+                "event_year": 2020,
+                "review_status": "VALID",
+                "human_label": "Logging",
+                "rejection_reason": None,
+                "remoteclip_label": "Logging",
+                "remoteclip_confidence": 0.8,
+                "remoteclip_probabilities": {"Logging": 0.8, "Wildfire": 0.2},
+                "xgboost_label": "Wildfire",
+                "xgboost_confidence": 0.7,
+                "xgboost_probabilities": {"Logging": 0.3, "Wildfire": 0.7},
+            },
+            {
+                "sample_id": "s2",
+                "event_id": "e2",
+                "event_year": 2021,
+                "review_status": "REJECTED",
+                "human_label": None,
+                "rejection_reason": "No PRE-images",
+                "remoteclip_label": None,
+                "remoteclip_confidence": None,
+                "remoteclip_probabilities": {},
+                "xgboost_label": None,
+                "xgboost_confidence": None,
+                "xgboost_probabilities": {},
+            },
+        ]
+        latent_rows = [
+            {
+                "source": "HANSEN_MINED",
+                "sample_id": "s1",
+                "event_id": "e1",
+                "knownness_k5": 0.9,
+                "hdbscan_is_noise": False,
+                "event_loss_area_ha": 10.0,
+                "pre_image_count": 2,
+                "post_image_count": 3,
+                "hansen_event_count": 1,
+                "is_multi_event_area": False,
+                "similarity_margin": 0.1,
+            },
+            {
+                "source": "MANUAL_TRAIN",
+                "sample_id": "manual",
+                "event_id": "manual-event",
+                "knownness_k5": 0.85,
+            },
+        ]
+        result = build_rejection_diagnostics(review_rows, latent_rows, seed=3)
+        self.assertEqual(result["summary"]["reviewed_events"], 2)
+        self.assertEqual(result["summary"]["latent_available_events"], 1)
+        self.assertEqual(result["summary"]["latent_missing_events"], 1)
+        hierarchy = {
+            row["review_hierarchy_class"]: row["count"]
+            for row in result["hierarchy_counts"]
+        }
+        self.assertEqual(hierarchy, {"VALID_LOGGING": 1, "NO_PRE": 1})
+
+    def test_small_event_threshold_finds_low_area_rule(self) -> None:
+        rows = []
+        for index in range(10):
+            rows.append(
+                {
+                    "human_state": "Logging",
+                    "rejection_reason_group": None,
+                    "event_loss_area_ha": 20.0 + index,
+                    "event_hansen_pixels": 400 + index,
+                    "hansen_loss_aoi_percent": 5.0 + index,
+                }
+            )
+        for index in range(6):
+            rows.append(
+                {
+                    "human_state": "Rejected",
+                    "rejection_reason_group": "EVENT_TOO_SMALL",
+                    "event_loss_area_ha": 0.5 + index * 0.2,
+                    "event_hansen_pixels": 5 + index,
+                    "hansen_loss_aoi_percent": 0.1 + index * 0.05,
+                }
+            )
+        result = small_event_threshold_analysis(rows)
+        area = next(row for row in result["summary"] if row["feature"] == "event_area_ha")
+        self.assertEqual(area["status"], "ok")
+        self.assertGreaterEqual(area["reject_rate_below"], 0.70)
+        self.assertEqual(area["valid_events_below"], 0)
+
+    def test_year_mismatch_parser_keeps_unknown_year_unknown(self) -> None:
+        self.assertEqual(
+            infer_expert_event_year("Последствия пожара прошлого года", 2022),
+            (2021, -1, "relative_year_in_free_text"),
+        )
+        self.assertEqual(
+            infer_expert_event_year("Пожар другого года", 2022),
+            (None, None, "different_year_without_direction"),
+        )
+
+    def test_year_mismatch_branch_builds_timelines_and_lopo_ranking(self) -> None:
+        rows = []
+        for point_index, (valid_year, mismatch_year, reason) in enumerate(
+            (
+                (2020, 2021, "Последствия пожара прошлого года"),
+                (2024, 2023, "Последствия пожара следующего года"),
+                (2019, 2021, "Пожар другого года"),
+            ),
+            start=1,
+        ):
+            sample_id = f"point-{point_index}"
+            common = {
+                "sample_id": sample_id,
+                "display_name": sample_id,
+                "download_count": 12,
+                "pre_download_count": 4,
+                "event_download_count": 4,
+                "post_download_count": 4,
+                "usable_pre_download_count": 3,
+                "usable_event_download_count": 3,
+                "usable_post_download_count": 3,
+                "bad_quality_download_count": 1,
+                "excluded_download_count": 1,
+                "hansen_loss_aoi_percent": 10.0,
+            }
+            rows.extend(
+                [
+                    {
+                        **common,
+                        "event_id": f"{sample_id}-valid",
+                        "event_year": valid_year,
+                        "event_loss_area_ha": 100.0,
+                        "event_hansen_pixels": 2000,
+                        "review_status": "VALID",
+                        "human_label": "Wildfire",
+                        "review_hierarchy_class": "VALID_WILDFIRE",
+                        "remoteclip_probability_wildfire": 0.95,
+                        "xgboost_probability_wildfire": 0.9,
+                    },
+                    {
+                        **common,
+                        "event_id": f"{sample_id}-mismatch",
+                        "event_year": mismatch_year,
+                        "event_loss_area_ha": 2.0,
+                        "event_hansen_pixels": 30,
+                        "review_status": "REJECTED",
+                        "review_hierarchy_class": "YEAR_MISMATCH",
+                        "rejection_reason_group": "YEAR_MISMATCH",
+                        "rejection_reason": reason,
+                        "remoteclip_probability_wildfire": 0.8,
+                        "xgboost_probability_wildfire": 0.75,
+                    },
+                ]
+            )
+        result = build_year_mismatch_research(rows, seed=7)
+        self.assertEqual(result["summary"]["year_mismatch_points"], 3)
+        self.assertEqual(result["summary"]["evaluable_points"], 3)
+        self.assertEqual(len(result["timeline_rows"]), 12)
+        methods = {row["method"] for row in result["ranking_metrics"]}
+        self.assertIn("MAX_HANSEN_AREA", methods)
+        self.assertIn("LOPO_LOGISTIC_REGRESSION", methods)
+        area = next(
+            row for row in result["ranking_metrics"] if row["method"] == "MAX_HANSEN_AREA"
+        )
+        self.assertEqual(area["hit_at_1"], 1.0)
+
+
 class NotebookTests(unittest.TestCase):
     def test_notebook_is_thin_and_valid_json(self) -> None:
         path = Path(__file__).resolve().parents[1] / "forest_ml_experiments.ipynb"
@@ -421,6 +777,50 @@ class NotebookTests(unittest.TestCase):
         self.assertIn("latent_event_level_table.csv", markdown)
         self.assertIn("Manual-vs-Hansen domain shift", markdown)
         self.assertIn("Combined UNKNOWN and AMBIGUOUS reject", markdown)
+        self.assertEqual(notebook["nbformat"], 4)
+
+    def test_reviewer_validation_notebook_is_thin_and_explicit(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "olga_model_validation.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        self.assertNotIn("def ", code)
+        self.assertIn('REVIEWER_NAME = "Olga"', code)
+        self.assertIn("run_reviewer_validation", code)
+        self.assertIn("Rejected events are not model errors", markdown)
+        self.assertIn("reviewed_points.csv", markdown)
+        self.assertEqual(notebook["nbformat"], 4)
+
+    def test_rejection_diagnostics_notebook_is_thin_and_hierarchical(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "olga_rejection_diagnostics.ipynb"
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        self.assertNotIn("def ", code)
+        self.assertIn("run_rejection_diagnostics", code)
+        self.assertIn("VALID vs REJECTED", markdown)
+        self.assertIn("Logging / Wildfire / Rejected", markdown)
+        self.assertIn("Point-level event history", markdown)
+        self.assertIn("EVENT_TOO_SMALL deterministic-threshold search", markdown)
+        self.assertIn("YEAR_MISMATCH temporal consistency", markdown)
+        self.assertIn("select the main physical event year", markdown)
+        self.assertIn("acquisition-pipeline statistics", markdown)
         self.assertEqual(notebook["nbformat"], 4)
 
     def test_metrics_table_contains_actual_values(self) -> None:

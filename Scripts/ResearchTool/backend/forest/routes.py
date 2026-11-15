@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import FOREST_EXPORTS_DIR, FOREST_IMPORTS_DIR, PROJECT_ROOT
@@ -62,6 +62,7 @@ from .model_labeling_service import build_model_labeling_plan
 from .model_inference_service import execute_model_labeling
 from .models import (
     ForestExport,
+    EventReview,
     HansenCandidateRun,
     HansenAnalysis,
     ManualValidation,
@@ -113,10 +114,12 @@ SENTINEL_REVIEW_REASON_CODES = {
 }
 VALID_FOR_NEW_SEARCH_FILTER = "__valid_for_new_search"
 NO_MANUAL_VALIDATION_FILTER = "__no_manual_validation"
+NEEDS_EVENT_REVIEW_FILTER = "__needs_event_review"
 SENTINEL_AVAILABILITY_VALUES = {"has_downloads", "no_downloads"}
 SPECIAL_MANUAL_VALIDATION_FILTERS = {
     VALID_FOR_NEW_SEARCH_FILTER,
     NO_MANUAL_VALIDATION_FILTER,
+    NEEDS_EVENT_REVIEW_FILTER,
 }
 HANSEN_SAMPLE_JOB_TOTAL = 5
 HANSEN_STAGE_PROGRESS = {
@@ -420,6 +423,48 @@ def sample_conditions(
                 .exists()
             )
             conditions.append(~has_manual_validation)
+        elif manual_validation == NEEDS_EVENT_REVIEW_FILTER:
+            has_event_review = (
+                select(EventReview.event_id)
+                .where(EventReview.event_id == SampleEvent.event_id)
+                .correlate(SampleEvent)
+                .exists()
+            )
+            has_draft_event_review = (
+                select(EventReview.event_id)
+                .where(
+                    EventReview.event_id == SampleEvent.event_id,
+                    EventReview.review_status == "DRAFT",
+                )
+                .correlate(SampleEvent)
+                .exists()
+            )
+            has_inherited_complete_review = and_(
+                or_(
+                    Sample.source_format.is_(None),
+                    Sample.source_format != "HANSEN_MINING",
+                ),
+                select(ManualValidation.sample_id)
+                .where(
+                    ManualValidation.sample_id == Sample.sample_id,
+                    ManualValidation.validation.in_(["Valid", "Unclear"]),
+                )
+                    .correlate(Sample)
+                .exists(),
+            )
+            needs_review_event = (
+                select(SampleEvent.event_id)
+                .where(
+                    SampleEvent.sample_id == Sample.sample_id,
+                    or_(
+                        has_draft_event_review,
+                        and_(~has_event_review, ~has_inherited_complete_review),
+                    ),
+                )
+                .correlate(Sample)
+                .exists()
+            )
+            conditions.append(needs_review_event)
         else:
             conditions.append(ManualValidation.validation == manual_validation)
     if sentinel_availability in SENTINEL_AVAILABILITY_VALUES:
@@ -982,8 +1027,6 @@ def run_sentinel_batch_job(job_id: str, request: SentinelBatchRequest) -> None:
             should_cancel=lambda: job_cancel_requested(job_id),
         )
         cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
-        archive_count = len(result.get("archive_paths") or [])
-        archive_text = f", {archive_count} ZIP part(s)" if result.get("parts") else ""
         jobs.update(
             job_id,
             status="cancelled" if cancelled else "completed",
@@ -1124,6 +1167,14 @@ def run_bundle_export_job(job_id: str, request: BundleExportJobRequest) -> None:
             should_cancel=lambda: job_cancel_requested(job_id),
         )
         cancelled = job_cancel_requested(job_id) or result.get("status") == "cancelled"
+        archive_count = len(result.get("archive_paths") or [])
+        archive_text = (
+            f", {archive_count} ZIP part(s)"
+            if result.get("parts")
+            else ", ZIP ready"
+            if result.get("zip_path")
+            else ""
+        )
         jobs.update(
             job_id,
             status="cancelled" if cancelled else "completed_with_errors" if result["failed"] else "completed",

@@ -81,8 +81,11 @@ from backend.forest.models import (  # noqa: E402
     SentinelDownload,
 )
 from backend.forest.routes import (  # noqa: E402
+    BundleExportJobRequest,
     SentinelBatchRequest,
     data_operation_input_path,
+    jobs,
+    run_bundle_export_job,
     samples_select,
     selected_batch_samples,
 )
@@ -212,6 +215,37 @@ class DataOperationsTest(unittest.TestCase):
         self.assertEqual(summary["estimated_zip_parts"], 3)
         self.assertEqual(summary["max_zip_size_mib"], 10)
         self.assertEqual(summary["largest_part_estimated_bytes"], 6 * MIB)
+
+    def test_bundle_export_job_reports_multipart_archives(self) -> None:
+        job = jobs.create("sentinel_bundle_export", total=2)
+        request = BundleExportJobRequest(
+            download_ids=["download-a", "download-b"],
+            profile="geotiff_only",
+            create_zip=True,
+            max_zip_size_mib=500,
+        )
+        result = {
+            "status": "completed",
+            "unique_files": 4,
+            "copied": 4,
+            "failed": 0,
+            "archive_paths": ["part-001.zip", "part-002.zip"],
+            "parts": [{"part_number": 1}, {"part_number": 2}],
+            "zip_path": None,
+        }
+
+        with (
+            patch("backend.forest.routes.SessionLocal") as session_local,
+            patch("backend.forest.routes.export_bundle", return_value=result),
+        ):
+            run_bundle_export_job(job.job_id, request)
+
+        completed = jobs.get(job.job_id)
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(completed.stage, "done")
+        self.assertEqual(completed.message, "Bundle: 4 copied, 0 failed, 2 ZIP part(s)")
+        self.assertEqual(completed.result, result)
+        session_local.return_value.close.assert_called_once()
 
     def test_multipart_bundle_parts_are_independently_importable_zips(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
