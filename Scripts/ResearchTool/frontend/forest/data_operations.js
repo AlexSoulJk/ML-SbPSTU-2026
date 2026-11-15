@@ -949,8 +949,8 @@ async function pollJob(callbacks) {
     if (runId) {
       forestState.dataOperationsLabelingPlan = await planModelLabeling({
         mining_run_id: runId,
-        remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
-        xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
+        remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v2",
+        xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v2",
       });
       renderLabelingPlan();
     }
@@ -1114,8 +1114,8 @@ export function initDataOperations(callbacks) {
       "checking model artifacts and event inputs",
       () => planModelLabeling({
         mining_run_id: runId,
-        remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
-        xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
+        remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v2",
+        xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v2",
       }),
     );
     renderLabelingPlan();
@@ -1129,8 +1129,8 @@ export function initDataOperations(callbacks) {
     }
     const job = await startModelLabeling({
       mining_run_id: runId,
-      remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v1",
-      xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v1",
+      remoteclip_version: $("forestDataOperationsRemoteclipVersion").value.trim() || "v2",
+      xgboost_version: $("forestDataOperationsXgboostVersion").value.trim() || "v2",
     });
     watchJob(job, callbacks);
   }));

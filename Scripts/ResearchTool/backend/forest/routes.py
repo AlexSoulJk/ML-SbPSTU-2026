@@ -58,7 +58,11 @@ from .event_service import (
 from .event_review_service import configured_annotator_name, save_event_review
 from .import_service import import_file
 from .jobs import jobs
-from .model_labeling_service import build_model_labeling_plan
+from .model_labeling_service import (
+    DEFAULT_REMOTECLIP_VERSION,
+    DEFAULT_XGBOOST_VERSION,
+    build_model_labeling_plan,
+)
 from .model_inference_service import execute_model_labeling
 from .models import (
     ForestExport,
@@ -281,8 +285,8 @@ class EventReviewRequest(BaseModel):
 
 class ModelLabelingPlanRequest(BaseModel):
     mining_run_id: str
-    remoteclip_version: str = Field(default="v1", max_length=128)
-    xgboost_version: str = Field(default="v1", max_length=128)
+    remoteclip_version: str = Field(default=DEFAULT_REMOTECLIP_VERSION, max_length=128)
+    xgboost_version: str = Field(default=DEFAULT_XGBOOST_VERSION, max_length=128)
 
 
 class ModelLabelingJobRequest(ModelLabelingPlanRequest):

@@ -16,3 +16,6 @@ graphify-out/.graphify_root
 graphify-out/cache/
 graphify-out/.graphify_analysis.json
 graphify-out/20??-??-??/
+graphify-out/memory
+Scripts/ResearchTool/Data/forest/exports
+Scripts/ResearchTool/Data/forest/imports

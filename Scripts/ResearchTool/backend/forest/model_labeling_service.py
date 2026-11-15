@@ -38,6 +38,8 @@ MODEL_SPECS = {
         "artifact": "model.json",
     },
 }
+DEFAULT_REMOTECLIP_VERSION = "v2"
+DEFAULT_XGBOOST_VERSION = "v2"
 
 
 def file_sha256(path: Path) -> str:
@@ -155,8 +157,8 @@ def build_model_labeling_plan(
     db: Session,
     *,
     mining_run_id: str,
-    remoteclip_version: str = "v1",
-    xgboost_version: str = "v1",
+    remoteclip_version: str = DEFAULT_REMOTECLIP_VERSION,
+    xgboost_version: str = DEFAULT_XGBOOST_VERSION,
 ) -> dict[str, Any]:
     sample_ids = list(
         db.scalars(

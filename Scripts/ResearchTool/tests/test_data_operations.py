@@ -36,7 +36,11 @@ from backend.forest.bundle_service import (  # noqa: E402
 )
 from backend.forest.hansen_service import hansen_tile_preview_payload  # noqa: E402
 from backend.forest.db_sync_service import apply_operation, compare_portable_tables  # noqa: E402
-from backend.forest.model_labeling_service import build_model_labeling_plan  # noqa: E402
+from backend.forest.model_labeling_service import (  # noqa: E402
+    DEFAULT_REMOTECLIP_VERSION,
+    DEFAULT_XGBOOST_VERSION,
+    build_model_labeling_plan,
+)
 from backend.forest.model_inference_service import (  # noqa: E402
     InferenceEvent,
     ModelInputIssue,
@@ -82,6 +86,7 @@ from backend.forest.models import (  # noqa: E402
 )
 from backend.forest.routes import (  # noqa: E402
     BundleExportJobRequest,
+    ModelLabelingPlanRequest,
     SentinelBatchRequest,
     data_operation_input_path,
     jobs,
@@ -1034,6 +1039,14 @@ class DataOperationsTest(unittest.TestCase):
         self.assertEqual(plan["summary"]["incomplete_inputs"], 2)
         self.assertFalse(plan["summary"]["remoteclip_artifact_ready"])
 
+    def test_model_labeling_production_defaults_are_v2(self) -> None:
+        request = ModelLabelingPlanRequest(mining_run_id="production-defaults")
+
+        self.assertEqual(DEFAULT_REMOTECLIP_VERSION, "v2")
+        self.assertEqual(DEFAULT_XGBOOST_VERSION, "v2")
+        self.assertEqual(request.remoteclip_version, "v2")
+        self.assertEqual(request.xgboost_version, "v2")
+
     def test_model_labeling_is_idempotent_and_keeps_manual_review_draft(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1043,13 +1056,13 @@ class DataOperationsTest(unittest.TestCase):
             checkpoint.write_bytes(b"checkpoint")
 
             def write_artifact(directory: str, filename: str, manifest: dict) -> None:
-                model_dir = models_root / directory / "v1"
+                model_dir = models_root / directory / "v2"
                 model_dir.mkdir(parents=True)
                 artifact = model_dir / filename
                 artifact.write_bytes(f"{directory}-artifact".encode("utf-8"))
                 manifest.update(
                     {
-                        "producer_version": "v1",
+                        "producer_version": "v2",
                         "artifact_sha256": file_sha256(artifact),
                         "class_order": ["Logging", "Wildfire"],
                     }

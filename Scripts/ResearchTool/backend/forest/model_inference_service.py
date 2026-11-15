@@ -24,7 +24,11 @@ from .ml.spectral_features import (
     spectral_input_status,
     stats_for_tif,
 )
-from .model_labeling_service import build_model_labeling_plan
+from .model_labeling_service import (
+    DEFAULT_REMOTECLIP_VERSION,
+    DEFAULT_XGBOOST_VERSION,
+    build_model_labeling_plan,
+)
 from .models import (
     DerivedPreview,
     EventLabel,
@@ -626,8 +630,8 @@ def execute_model_labeling(
     db: Session,
     *,
     mining_run_id: str,
-    remoteclip_version: str = "v1",
-    xgboost_version: str = "v1",
+    remoteclip_version: str = DEFAULT_REMOTECLIP_VERSION,
+    xgboost_version: str = DEFAULT_XGBOOST_VERSION,
     event_ids: list[str] | None = None,
     execution_id: str | None = None,
     progress: ProgressCallback | None = None,
