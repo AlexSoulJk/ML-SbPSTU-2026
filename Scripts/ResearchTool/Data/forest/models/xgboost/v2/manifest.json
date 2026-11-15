@@ -1,0 +1,74 @@
+{
+  "artifact_schema_version": "xgboost_event_classifier_v2",
+  "producer_name": "XGBOOST",
+  "producer_version": "v2",
+  "recipe_version": "legacy_recipe_event_level_v2",
+  "artifact_path": "Scripts/ResearchTool/Data/forest/models/xgboost/v2/model.json",
+  "artifact_sha256": "44d36d9e4c1162740c2936c58b99d71e925f158cf37deff56aa526102c7d26c8",
+  "metrics_path": "Scripts/ResearchTool/Data/forest/models/xgboost/v2/metrics.json",
+  "created_at": "2026-11-15T21:19:39.236787+00:00",
+  "feature_schema_version": "xgboost_event_spectral_hansen_v2",
+  "feature_names": [
+    "ndvi_median_rel",
+    "nbr_median_rel",
+    "ndmi_median_rel",
+    "hansen_loss_fraction",
+    "hansen_recent_loss_5y",
+    "hansen_dominant_share"
+  ],
+  "class_order": [
+    "Logging",
+    "Wildfire"
+  ],
+  "preprocessing": {
+    "fill_values": {
+      "ndvi_median_rel": -0.06579234759056195,
+      "nbr_median_rel": -0.22114691194091154,
+      "ndmi_median_rel": -0.3854875654944825,
+      "hansen_loss_fraction": 0.697469,
+      "hansen_recent_loss_5y": 0.603499,
+      "hansen_dominant_share": 0.9236999302384739
+    }
+  },
+  "hyperparameters": {
+    "n_estimators": 400,
+    "max_depth": 4,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 3,
+    "reg_lambda": 1.0,
+    "tree_method": "hist",
+    "random_state": 42,
+    "n_jobs": -1,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss"
+  },
+  "training_cohort": {
+    "cohort_id": "FULL_COHORT",
+    "records": 271,
+    "samples": 222,
+    "class_counts": {
+      "Logging": 109,
+      "Wildfire": 162
+    },
+    "record_ids_sha256": "1ebebbc76faebd5ef5f516a7177e1a35e46ea6dfaddaa043f49d695b6e3a32ce",
+    "manifest_hash": "2cbe4935b9fb9baf39d08766150ae26196f52acd25a47ae0d4cae4ec4f07e57a"
+  },
+  "split_manifest_hash": "b9cb126c8c6adbaba982b95b6f65ad6590188b52a2c4627e6bed333715946fa2",
+  "experiment_config_hash": "7605c6cd2b7b6261a5f2c78fde1be956fbc0afa82ad3cfc53bc4a835e7563688",
+  "training_database_fingerprint": {
+    "path": "Scripts/ResearchTool/Data/forest/state.sqlite",
+    "size": 97755136,
+    "mtime_ns": 1794739123403724000,
+    "sha256": "46c6c3c8e3734cec8dd6b2b08d8cc950c8d5093768119ee1ecb955da2c8ef053"
+  },
+  "software": {
+    "xgboost": "3.2.0",
+    "numpy": "2.4.6"
+  },
+  "round_trip_smoke_test": {
+    "status": "passed",
+    "probability_wildfire": 0.9148350954055786
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "artifact_schema_version": "remoteclip_logreg_artifact_v1",
+  "producer_name": "REMOTECLIP_LOGREG",
+  "producer_version": "v2",
+  "recipe_version": "legacy_recipe_event_level_v2",
+  "artifact_path": "Scripts/ResearchTool/Data/forest/models/remoteclip_logreg/v2/classifier.joblib",
+  "artifact_sha256": "7caad30a1fd05262f9e03a608462e20cd06b8e8e207cdef0cdd7b96a740568fa",
+  "metrics_path": "Scripts/ResearchTool/Data/forest/models/remoteclip_logreg/v2/metrics.json",
+  "created_at": "2026-11-15T21:19:43.103785+00:00",
+  "training_database_fingerprint": {
+    "path": "Scripts/ResearchTool/Data/forest/state.sqlite",
+    "size": 97755136,
+    "mtime_ns": 1794739123403724000,
+    "sha256": "46c6c3c8e3734cec8dd6b2b08d8cc950c8d5093768119ee1ecb955da2c8ef053"
+  },
+  "training_cohort": {
+    "cohort_id": "FULL_COHORT",
+    "records": 271,
+    "samples": 222,
+    "class_counts": {
+      "Logging": 109,
+      "Wildfire": 162
+    },
+    "record_ids_sha256": "1ebebbc76faebd5ef5f516a7177e1a35e46ea6dfaddaa043f49d695b6e3a32ce",
+    "manifest_hash": "2cbe4935b9fb9baf39d08766150ae26196f52acd25a47ae0d4cae4ec4f07e57a"
+  },
+  "class_order": [
+    "Logging",
+    "Wildfire"
+  ],
+  "feature_schema_version": "remoteclip_event_embedding_v1",
+  "feature_variant": "PRE_POST",
+  "feature_dimension": 1024,
+  "required_periods": [
+    "PRE",
+    "POST"
+  ],
+  "decision_threshold": 0.5,
+  "embedding": {
+    "model_name": "ViT-B-32",
+    "preprocessing_version": "open_clip_default_v1",
+    "normalization_version": "l2_v1",
+    "checkpoint_path": "checkpoints/models--chendelong--RemoteCLIP/snapshots/bf1d8a3ccf2ddbf7c875705e46373bfe542bce38/RemoteCLIP-ViT-B-32.pt",
+    "checkpoint_sha256": "60014e395d930a3f2963d1d89c8522bf4ad56775571e4356e866864789af85c4"
+  },
+  "classifier_config": {
+    "class_weight": "balanced",
+    "max_iter": 2000,
+    "solver": "liblinear",
+    "random_state": 42
+  },
+  "split_manifest_hash": "b9cb126c8c6adbaba982b95b6f65ad6590188b52a2c4627e6bed333715946fa2",
+  "experiment_config_hash": "7605c6cd2b7b6261a5f2c78fde1be956fbc0afa82ad3cfc53bc4a835e7563688",
+  "software": {
+    "numpy": "2.4.6",
+    "scikit_learn": "1.9.1"
+  },
+  "round_trip_smoke_test": {
+    "status": "passed",
+    "probability_wildfire": 0.9926261647644797
+  }
+}
